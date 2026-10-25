@@ -1,12 +1,16 @@
 # Ghost Hands Mobile
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v3.16.0-blue.svg)](CHANGELOG.md)
+[![Host tests](https://img.shields.io/badge/host_tests-1%2C738-green.svg)](v1/BUILD_NOTES.md)
+
 **A goal-driven web agent that runs entirely on your phone. No cloud brain, no account, no data leaving the device.**
 
 Give it a goal in plain words ("find the length of the Clinch River", "watch this page and tell me when the price changes") and Ghost Hands plans, browses, reads, and acts on its own, using an on-device language model. Every consequential move is judged by a built-in governor before it runs, written to a provenance trail, and, when it matters, gated on your approval.
 
 From [Ghost Developer Studio](https://github.com/littlestjames82-sys). MIT licensed. Sibling project: [Ghost Hands for desktop](https://github.com/littlestjames82-sys/ghost-hands) (Python, governed browser automation).
 
-> Status (Oct 25, 2026): latest shipped release is **v3.15.0** (multi-tab). The source snapshot in this repo is **v3.4.0**; a full source sync lands with the next train release. Nothing here is on the Play Store; builds are sideloaded APKs signed with the studio keystore.
+> Status (Oct 25, 2026): latest shipped release is **v3.16.0** (downloads, documents, page watch), and the source in this repo is synced to it. Nothing here is on the Play Store; builds are sideloaded APKs signed with the studio keystore. What is being built next is in `ROADMAP_EVERYTHING.md`.
 
 ## How it works
 
@@ -18,6 +22,9 @@ From [Ghost Developer Studio](https://github.com/littlestjames82-sys). MIT licen
 
 ## Highlights by release
 
+Full list in `CHANGELOG.md`.
+
+- **v3.16 Downloads, Documents, Page Watch:** every download offer is judged by the Governor's own order (executable and archive shapes are consequential and ask first), goals can read local documents the way they read pages, and any page can be watched for changes.
 - **v3.15 Multi-tab:** up to 3 tabs, per-tab perception and read state, done-grounding isolated per tab (a fact read in tab 1 does not ground an answer in tab 2; the scratchpad is the sanctioned bridge).
 - **v3.14 Beyond the Browser (spike):** an accessibility-service feasibility probe, inert unless you enable it in Android Settings AND flip the experimental toggle. Verdict: GO-IF, readonly first.
 - **v3.13 Trust Pack:** resume interrupted runs, a governor self-check in Diagnostics, and per-site remembered approvals you can revoke in Settings.
@@ -44,7 +51,7 @@ The app builds without Gradle, using the Android SDK command-line tools directly
 
 ```bash
 cd v1
-./run-host-tests.sh   # host harness: 1,614 checks at v3.15, must be green twice
+./run-host-tests.sh   # host harness: 1,738 checks at v3.16, must be green twice
 ./build-apk.sh        # produces ghost-hands.apk, signed with the preserved keystore
 ```
 
@@ -57,6 +64,7 @@ Package: `com.ghosthands.app` · min SDK 24 · target SDK 34.
 - `v1/` : the product. Java sources in `v1/app/src/main/java/com/ghosthands/app/` (54 classes, framework-only, no AndroidX), host tests in `v1/test/`, native shim in `v1/native/shim/`.
 - `app/`, `native/`, `build-apk.sh` at the root: the Oct 24 on-device proof the product was founded on. Kept for provenance.
 - `parity-lab/`, `read-lab/`: development labs used to pin the perception JS against real pages.
+- `ROADMAP_EVERYTHING.md`: the current release train (R1 to R14) with its status log. `CHANGELOG.md`: every release, one line each.
 
 ## Honest limits
 

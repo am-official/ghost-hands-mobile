@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability (private)
+    url: https://github.com/littlestjames82-sys/ghost-hands-mobile/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.
+  - name: Ghost Hands for desktop
+    url: https://github.com/littlestjames82-sys/ghost-hands
+    about: The Python sibling project (governed browser automation) lives there.
