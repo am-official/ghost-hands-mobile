@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.ghosthands.app"
+    android:versionCode="25"
+    android:versionName="3.3.0">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- v3.0 (item 3): voice goals. The only permission this
+         release adds; requested at runtime the first time the
+         mic is tapped, and used only by the framework speech
+         recognizer. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:usesCleartextTraffic="false">
+        <!-- v3.0: singleTop so a check/finish notification tap
+             reaches the live instance via onNewIntent instead of
+             stacking a second Activity. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- v3.0 (item 2): the scheduled-check alarm receiver.
+             Not exported: only this app's own alarms (and the
+             system delivering them) can reach it. -->
+        <receiver
+            android:name=".CheckReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

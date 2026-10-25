@@ -1,0 +1,1 @@
+(function(){var e=window.__gh&&window.__gh.els[0];if(!e)return 'error: element 1 not on page';e.scrollIntoView({block:'center'});if(e.tagName==='SELECT'||e.tagName==='INPUT'||e.tagName==='TEXTAREA'){e.focus();if(e.tagName==='SELECT')return 'ok: focused select #1';}e.click();return 'ok: tapped #1';})()

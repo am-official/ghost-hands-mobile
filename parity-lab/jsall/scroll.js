@@ -1,0 +1,1 @@
+(function(){var d=Math.floor(window.innerHeight*0.85)*1;window.scrollBy(0,d);return 'ok: scrolled down to y='+Math.floor(window.scrollY);})()
