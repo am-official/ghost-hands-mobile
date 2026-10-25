@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
@@ -29,9 +30,11 @@ import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.inputmethod.EditorInfo;
 import android.webkit.DownloadListener;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
@@ -58,6 +61,7 @@ import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -142,22 +146,55 @@ public class MainActivity extends Activity {
 
     // v2.6 (model switcher): the persisted brain choice (a
     // ModelStore registry id), resolved at launch; the default is
-    // Q5_K_M, the behaviour since v2.4.
+    // Q5_K_M, the behaviour since v2.4. Since v3.4 the key's
+    // canonical name is Settings.KEY_MODEL_ID and the value rides
+    // the settings model; this field mirrors it.
     private static final String PREFS_NAME = "ghosthands";
-    private static final String PREF_MODEL_ID = "model_id";
     private String activeModelId = ModelStore.DEFAULT_ID;
     private Button modelQ4Btn;
     private Button modelQ5Btn;
 
     // v2.6.1 (grammar kill-switch): the persisted "Output grammar
-    // lock" choice (a ModelStore grammarPrefValue string in the
-    // same preferences), resolved at launch; it defaults to OFF —
-    // the pre-v2.4 configuration — for every install, upgrades
+    // lock" choice, resolved at launch; it defaults to OFF — the
+    // pre-v2.4 configuration — for every install, upgrades
     // included. Carried into the engine (ModelEngine.setGrammarOn)
-    // and handed to each Agent for its trail records.
-    private static final String PREF_GRAMMAR_ON = "grammar_on";
+    // and handed to each Agent for its trail records. Since v3.4
+    // the key's canonical name is Settings.KEY_GRAMMAR_ON; this
+    // field mirrors the model's value.
     private boolean grammarOn = ModelStore.GRAMMAR_DEFAULT_ON;
     private Button grammarBtn;
+
+    // v3.4 (settings accordion): the ONE settings model — every
+    // setting in the app resolves through it (Settings), persists
+    // through it (persistSettings), and is controlled exactly
+    // once, in the accordion built in buildUi. activeModelId and
+    // grammarOn above are now mirrors of the model's first two
+    // fields (the code that always read them still does); the
+    // model is loaded before buildUi and is the source of truth
+    // the mirrors are refreshed from at every change.
+    private Settings settings;
+    // AGENT section controls.
+    private Button[] packChips;
+    private Button[] stepChips;
+    private Button copilotBtn;
+    private Button autoReadBtn;
+    // READING section controls.
+    private Button[] chunkChips;
+    private Button settleBtn;
+    // VOICE & SPEECH section controls.
+    private Button voiceBtn;
+    private Button speakFinishBtn;
+    // ALERTS section controls.
+    private Button buzzBtn;
+    // DATA section controls + the About footer's line.
+    private Button[] shotChips;
+    private EditText homeEdit;
+    private TextView aboutText;
+    // The accordion's moving parts (parallel lists, header order).
+    private final List<LinearLayout> accBodies =
+            new ArrayList<LinearLayout>();
+    private final List<TextView> accChevrons =
+            new ArrayList<TextView>();
 
     // v2.6 (press acknowledgement): true from the Stop tap until
     // the agent thread actually halts; the pill shows STOPPING
@@ -246,17 +283,31 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(COL_BG_BOT);
         store = new ModelStore(getFilesDir());
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        activeModelId = ModelStore.resolveId(prefs.getString(PREF_MODEL_ID, null));
-        // v2.6.1: the grammar kill-switch, the same way — resolved
-        // from its persisted value (absent = off) and handed to the
-        // engine before anything can generate.
-        grammarOn = ModelStore.resolveGrammarOn(
-                prefs.getString(PREF_GRAMMAR_ON, null));
+        // v3.4: the settings model loads first — the brain and
+        // grammar mirrors below are ITS first two fields, read
+        // through the same resolvers that always read them
+        // (Settings.fromMap delegates to ModelStore), so an
+        // existing install's stored choices survive the
+        // accordion move byte-for-byte.
+        settings = loadSettings(prefs);
+        activeModelId = settings.modelId;
+        grammarOn = settings.grammarOn;
         engine.setGrammarOn(grammarOn);
-        pack = PolicyPacks.loadPack("standard");
+        // v3.4 (setting c): a fresh run starts from the stored
+        // default pack, not a hardcoded "standard".
+        currentPackId = settings.defaultPackId;
+        pack = PolicyPacks.loadPack(currentPackId);
         buildUi();
         refreshMicUi();
         setupWebView();
+        // v3.4 (setting m): a set home page loads at launch.
+        // Blank — the field's empty state, and every install
+        // before this setting existed — loads nothing, exactly
+        // the behaviour the app has always had.
+        if (settings.homePage.length() > 0) {
+            urlEdit.setText(settings.homePage);
+            webView.loadUrl(settings.homePage);
+        }
         // v3.0: the saved-goals store, its alarms, and whatever
         // the launch intent carries (a check notification's goal,
         // a finish notification's answer card).
@@ -631,22 +682,52 @@ public class MainActivity extends Activity {
         dlLp.topMargin = dp(8);
         modelCard.addView(downloadBtn, dlLp);
 
-        // v2.6: the brain picker — the same 1.5B in two quants.
-        // The chips' text and enabled state are refreshModelUi's
-        // business (ModelStore.pickerLabel); tapping one switches.
-        TextView brainLabel = cardLabel("BRAIN");
-        LinearLayout.LayoutParams blLp = new LinearLayout.LayoutParams(
+        // ---------------- v3.4: SETTINGS, in an accordion ----
+        // Every setting the app has lives in this one card, in
+        // collapsible sections, exactly once (the one-control
+        // rule — a duplicated setting in this app's family once
+        // silently erased itself). The BRAIN chips and the
+        // grammar switch MOVED here from the model card above;
+        // they are the same views, the same handlers, and the
+        // same preference keys (Settings), so nothing about how
+        // they behave — or what an upgrade's stored values mean —
+        // changed in the move. Changes persist as they are made
+        // (persistSettings); there is no Apply button.
+        LinearLayout settingsCard = new LinearLayout(this);
+        settingsCard.setOrientation(LinearLayout.VERTICAL);
+        settingsCard.setBackground(cardBg());
+        settingsCard.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams setLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        blLp.topMargin = dp(10);
-        modelCard.addView(brainLabel, blLp);
+        setLp.topMargin = dp(12);
+        root.addView(settingsCard, setLp);
+        settingsCard.addView(cardLabel("SETTINGS"));
+        TextView setNote = new TextView(this);
+        setNote.setText("Every setting lives here, once. Changes "
+                + "save as you tap.");
+        setNote.setTextSize(11);
+        setNote.setTextColor(COL_MUTED);
+        LinearLayout.LayoutParams setNoteLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        setNoteLp.topMargin = dp(4);
+        settingsCard.addView(setNote, setNoteLp);
+
+        // BRAIN: the v2.6 model picker and the v2.6.1 grammar
+        // kill-switch, relocated — same views, handlers and
+        // refresh methods (refreshBrainChips / refreshGrammarUi)
+        // as they had in the model card.
+        LinearLayout brainBody = accordionSection(settingsCard, "BRAIN");
+        smallLabel(brainBody, "Model — both downloads are kept; "
+                + "switching never deletes a file");
         LinearLayout brainRow = new LinearLayout(this);
         brainRow.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams brLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         brLp.topMargin = dp(6);
-        modelCard.addView(brainRow, brLp);
+        brainBody.addView(brainRow, brLp);
         modelQ4Btn = chipButton("Q4_K_M");
         modelQ4Btn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { onModelPicked(ModelStore.Q4_ID); }
@@ -661,11 +742,7 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         q5Lp.leftMargin = dp(8);
         brainRow.addView(modelQ5Btn, q5Lp);
-
-        // v2.6.1: the grammar kill-switch, directly under the brain
-        // picker — an explanatory label (ModelStore.GRAMMAR_LABEL,
-        // verbatim) and a state chip that toggles it. The chip's
-        // text and enabled state are refreshGrammarUi's business.
+        // The grammar label is ModelStore.GRAMMAR_LABEL, verbatim.
         TextView grammarLabel = new TextView(this);
         grammarLabel.setText(ModelStore.GRAMMAR_LABEL);
         grammarLabel.setTextSize(11);
@@ -674,7 +751,7 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         glLp.topMargin = dp(10);
-        modelCard.addView(grammarLabel, glLp);
+        brainBody.addView(grammarLabel, glLp);
         grammarBtn = chipButton(ModelStore.grammarToggleLabel(grammarOn));
         grammarBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { onGrammarToggled(); }
@@ -683,7 +760,158 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         gbLp.topMargin = dp(6);
-        modelCard.addView(grammarBtn, gbLp);
+        brainBody.addView(grammarBtn, gbLp);
+        sectionNote(brainBody, "Brain and grammar changes are "
+                + "idle-only: both lock while a run or a download "
+                + "is in flight.");
+
+        // AGENT: the defaults a new run starts from.
+        LinearLayout agentBody = accordionSection(settingsCard, "AGENT");
+        smallLabel(agentBody, "Default policy for new runs");
+        LinearLayout packRow = sectionRow(agentBody);
+        packChips = new Button[PolicyPacks.NAMES.length];
+        for (int i = 0; i < PolicyPacks.NAMES.length; i++) {
+            final String pid = PolicyPacks.NAMES[i];
+            packChips[i] = rowChip(packRow, packChipLabel(pid), i == 0);
+            packChips[i].setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    onDefaultPackPicked(pid);
+                }
+            });
+        }
+        smallLabel(agentBody, "Max steps per run");
+        LinearLayout stepRow = sectionRow(agentBody);
+        stepChips = new Button[Settings.MAX_STEPS_CHOICES.length];
+        for (int i = 0; i < Settings.MAX_STEPS_CHOICES.length; i++) {
+            final int steps = Settings.MAX_STEPS_CHOICES[i];
+            stepChips[i] = rowChip(stepRow, String.valueOf(steps), i == 0);
+            stepChips[i].setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    onMaxStepsPicked(steps);
+                }
+            });
+        }
+        copilotBtn = toggleButton(agentBody, new View.OnClickListener() {
+            @Override public void onClick(View v) { onCopilotToggled(); }
+        });
+        autoReadBtn = toggleButton(agentBody, new View.OnClickListener() {
+            @Override public void onClick(View v) { onAutoReadToggled(); }
+        });
+        sectionNote(agentBody, "Applies from the next run. A "
+                + "saved goal you load still brings its own "
+                + "policy; a scheduled check still runs readonly.");
+
+        // READING: how page text is served to the planner.
+        LinearLayout readBody = accordionSection(settingsCard, "READING");
+        smallLabel(readBody, "Read chunk size");
+        LinearLayout chunkRow = sectionRow(readBody);
+        final String[] chunkLabels = {"Auto", "Large", "Small"};
+        chunkChips = new Button[chunkLabels.length];
+        for (int i = 0; i < chunkLabels.length; i++) {
+            final int pref = i;
+            chunkChips[i] = rowChip(chunkRow, chunkLabels[i], i == 0);
+            chunkChips[i].setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    onChunkPrefPicked(pref);
+                }
+            });
+        }
+        settleBtn = toggleButton(readBody, new View.OnClickListener() {
+            @Override public void onClick(View v) { onSettleToggled(); }
+        });
+        sectionNote(readBody, "Auto serves smaller chunks on "
+                + "dense pages (the behaviour since v2.9). The "
+                + "density settle waits for a page's text to stop "
+                + "growing before a read; off reads sooner, "
+                + "sometimes thinner.");
+
+        // VOICE & SPEECH.
+        LinearLayout voiceBody = accordionSection(settingsCard,
+                "VOICE & SPEECH");
+        voiceBtn = toggleButton(voiceBody, new View.OnClickListener() {
+            @Override public void onClick(View v) { onVoiceToggled(); }
+        });
+        speakFinishBtn = toggleButton(voiceBody,
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        onSpeakFinishToggled();
+                    }
+                });
+        sectionNote(voiceBody, "Speak on finish reads a "
+                + "finished run's answer card aloud — only when "
+                + "the app is in front and the run actually "
+                + "answered; errors and stops are never shouted.");
+
+        // ALERTS.
+        LinearLayout alertBody = accordionSection(settingsCard, "ALERTS");
+        buzzBtn = toggleButton(alertBody, new View.OnClickListener() {
+            @Override public void onClick(View v) { onBuzzToggled(); }
+        });
+        sectionNote(alertBody, "The buzz when a run ends "
+                + "off-screen. Watched-goal change alerts are "
+                + "not gated by this — a change is the watch's "
+                + "whole signal, and it always buzzes.");
+
+        // DATA.
+        LinearLayout dataBody = accordionSection(settingsCard, "DATA");
+        smallLabel(dataBody, "Run screenshots kept");
+        LinearLayout shotRow = sectionRow(dataBody);
+        shotChips = new Button[Settings.SHOTS_CHOICES.length];
+        for (int i = 0; i < Settings.SHOTS_CHOICES.length; i++) {
+            final int kept = Settings.SHOTS_CHOICES[i];
+            shotChips[i] = rowChip(shotRow, String.valueOf(kept), i == 0);
+            shotChips[i].setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    onShotsKeptPicked(kept);
+                }
+            });
+        }
+        smallLabel(dataBody, "Home page — loaded when the app "
+                + "starts; blank loads nothing");
+        homeEdit = new EditText(this);
+        homeEdit.setSingleLine(true);
+        homeEdit.setText(settings.homePage);
+        homeEdit.setHint("https://example.com");
+        homeEdit.setBackground(null);
+        homeEdit.setTextColor(COL_TEXT);
+        homeEdit.setHintTextColor(COL_MUTED);
+        homeEdit.setTextSize(13);
+        homeEdit.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        homeEdit.setOnEditorActionListener(
+                new TextView.OnEditorActionListener() {
+                    @Override public boolean onEditorAction(TextView v,
+                            int actionId, KeyEvent event) {
+                        if (actionId == EditorInfo.IME_ACTION_DONE) {
+                            commitHomePage();
+                            return true;
+                        }
+                        return false;
+                    }
+                });
+        homeEdit.setOnFocusChangeListener(
+                new View.OnFocusChangeListener() {
+                    @Override public void onFocusChange(View v,
+                            boolean hasFocus) {
+                        if (!hasFocus) commitHomePage();
+                    }
+                });
+        LinearLayout.LayoutParams homeLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        homeLp.topMargin = dp(6);
+        dataBody.addView(homeEdit, homeLp);
+
+        // The About block: the accordion's foot, not a setting.
+        aboutText = new TextView(this);
+        aboutText.setTextSize(11);
+        aboutText.setTextColor(COL_MUTED);
+        LinearLayout.LayoutParams aboutLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        aboutLp.topMargin = dp(14);
+        settingsCard.addView(aboutText, aboutLp);
+        refreshSettingsUi();
+        refreshAbout();
 
         // address bar: full-width pill, glyph left, GO segment right
         LinearLayout urlRow = new LinearLayout(this);
@@ -1382,6 +1610,7 @@ public class MainActivity extends Activity {
         }
         refreshBrainChips();
         refreshGrammarUi();
+        refreshAbout();
         updatePill();
     }
 
@@ -1421,8 +1650,11 @@ public class MainActivity extends Activity {
             return;
         }
         activeModelId = spec.id;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .putString(PREF_MODEL_ID, spec.id).apply();
+        // v3.4: the choice persists through the settings model
+        // (the same "model_id" key the direct write always used —
+        // Settings.toMap carries it).
+        settings.modelId = spec.id;
+        persistSettings();
         engine.close();
         refreshModelUi();
         feed("Brain: " + spec.displayName + " chosen.");
@@ -1478,14 +1710,331 @@ public class MainActivity extends Activity {
         }
         if (downloading) return;
         grammarOn = !grammarOn;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .putString(PREF_GRAMMAR_ON,
-                        ModelStore.grammarPrefValue(grammarOn)).apply();
+        // v3.4: persists through the settings model (the same
+        // "grammar_on" key, in ModelStore.grammarPrefValue's
+        // encoding — Settings.toMap carries it).
+        settings.grammarOn = grammarOn;
+        persistSettings();
         engine.setGrammarOn(grammarOn);
         refreshGrammarUi();
         feed(grammarOn
                 ? "Output grammar lock: ON (experimental, v2.4 behaviour)."
                 : "Output grammar lock: OFF (stable, pre-v2.4 behaviour).");
+    }
+
+    // ---------------- v3.4: settings (the accordion) ------------
+    //
+    // The bridge: SharedPreferences <-> the Settings model. The
+    // Activity reads every Settings key once, at launch
+    // (loadSettings), and writes the model's whole canonical map
+    // on every change (persistSettings) — one path each way, so
+    // a key can never be read through one encoding and written
+    // through another.
+
+    private Settings loadSettings(SharedPreferences prefs) {
+        Map<String, String> m = new HashMap<String, String>();
+        for (int i = 0; i < Settings.ALL_KEYS.length; i++) {
+            String v = prefs.getString(Settings.ALL_KEYS[i], null);
+            if (v != null) m.put(Settings.ALL_KEYS[i], v);
+        }
+        return Settings.fromMap(m);
+    }
+
+    private void persistSettings() {
+        SharedPreferences.Editor ed =
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit();
+        for (Map.Entry<String, String> e : settings.toMap().entrySet()) {
+            ed.putString(e.getKey(), e.getValue());
+        }
+        ed.apply();
+    }
+
+    /** One accordion section: a tappable header row (title +
+     *  chevron) over a body that starts collapsed. Tapping a
+     *  header closes every section, then opens this one if it
+     *  was closed — one section open at a time. The body is
+     *  returned for the section's controls. Expand/collapse is
+     *  an instant visibility toggle (framework-simple, nothing
+     *  to desync) and, like all accordion behaviour, is
+     *  device-verified UI. */
+    private LinearLayout accordionSection(LinearLayout card, String title) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(0, dp(9), 0, dp(9));
+        header.setClickable(true);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(12);
+        t.setTextColor(COL_TEXT);
+        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setLetterSpacing(0.12f);
+        header.addView(t, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        final TextView chev = new TextView(this);
+        chev.setText("▸");
+        chev.setTextSize(13);
+        chev.setTextColor(COL_CYAN);
+        header.addView(chev);
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setVisibility(View.GONE);
+        final LinearLayout bodyRef = body;
+        final TextView chevRef = chev;
+        header.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                boolean opening = bodyRef.getVisibility() != View.VISIBLE;
+                for (int i = 0; i < accBodies.size(); i++) {
+                    accBodies.get(i).setVisibility(View.GONE);
+                    accChevrons.get(i).setText("▸");
+                }
+                if (opening) {
+                    bodyRef.setVisibility(View.VISIBLE);
+                    chevRef.setText("▾");
+                }
+            }
+        });
+        card.addView(header);
+        card.addView(body);
+        accBodies.add(body);
+        accChevrons.add(chev);
+        return body;
+    }
+
+    /** A small muted label inside a section body. */
+    private TextView smallLabel(LinearLayout parent, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(11);
+        t.setTextColor(COL_MUTED);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(10);
+        parent.addView(t, lp);
+        return t;
+    }
+
+    /** A muted explanatory note at a section's foot — where a
+     *  setting's "when does this apply" answer lives. */
+    private void sectionNote(LinearLayout parent, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(11);
+        t.setTextColor(COL_MUTED);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        parent.addView(t, lp);
+    }
+
+    /** A horizontal chip row inside a section body. */
+    private LinearLayout sectionRow(LinearLayout parent) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        parent.addView(row, lp);
+        return row;
+    }
+
+    /** One equal-weight chip in a section row. */
+    private Button rowChip(LinearLayout row, String label, boolean first) {
+        Button b = chipButton(label);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        if (!first) lp.leftMargin = dp(6);
+        row.addView(b, lp);
+        return b;
+    }
+
+    /** A full-width toggle chip in a section body (its text is
+     *  refreshSettingsUi's business, like the grammar chip's). */
+    private Button toggleButton(LinearLayout parent,
+                                View.OnClickListener listener) {
+        Button b = chipButton("");
+        b.setOnClickListener(listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        parent.addView(b, lp);
+        return b;
+    }
+
+    /** A pack id's chip label ("readonly" -> "Readonly"). */
+    private static String packChipLabel(String packId) {
+        if (packId == null || packId.length() == 0) return "";
+        return packId.substring(0, 1).toUpperCase(Locale.US)
+                + packId.substring(1);
+    }
+
+    private void refreshToggle(Button b, String label, boolean on) {
+        if (b == null) return;
+        b.setText(label + ": " + (on ? "On" : "Off"));
+        b.setTextColor(on ? COL_CYAN : COL_MUTED);
+    }
+
+    private void refreshChoices(Button[] chips, int selected) {
+        if (chips == null) return;
+        for (int i = 0; i < chips.length; i++) {
+            chips[i].setTextColor(i == selected ? COL_CYAN : COL_TEXT);
+        }
+    }
+
+    private static int indexOfInt(int[] values, int v) {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == v) return i;
+        }
+        return 0;
+    }
+
+    private static int indexOfStr(String[] values, String v) {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equals(v)) return i;
+        }
+        return 0;
+    }
+
+    /** Mirror the whole model into the accordion controls. The
+     *  home field is deliberately NOT refreshed here — it is a
+     *  text field the user may be typing in; it is set at build
+     *  and on its own commit. */
+    private void refreshSettingsUi() {
+        if (settings == null) return;
+        refreshChoices(packChips,
+                indexOfStr(PolicyPacks.NAMES, settings.defaultPackId));
+        refreshChoices(stepChips, indexOfInt(
+                Settings.MAX_STEPS_CHOICES, settings.maxSteps));
+        refreshToggle(copilotBtn, "Co-pilot assists", settings.copilotOn);
+        refreshToggle(autoReadBtn, "Auto-read on arrival",
+                settings.autoReadOn);
+        refreshChoices(chunkChips, settings.chunkPref);
+        refreshToggle(settleBtn, "Density settle", settings.settleOn);
+        refreshToggle(voiceBtn, "Voice goals", settings.voiceOn);
+        refreshToggle(speakFinishBtn, "Speak the answer on finish",
+                settings.speakOnFinish);
+        refreshToggle(buzzBtn, "Finish buzz", settings.buzzOn);
+        refreshChoices(shotChips, indexOfInt(
+                Settings.SHOTS_CHOICES, settings.shotsKept));
+    }
+
+    /** The About block: version, the active model (name + file
+     *  size from the registry spec), and the source repo as
+     *  plain text. Refreshed with the model UI, so a brain
+     *  switch rewrites the model line. */
+    private void refreshAbout() {
+        if (aboutText == null) return;
+        String ver = "?";
+        try {
+            PackageInfo pi = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            ver = pi.versionName + " (code " + pi.versionCode + ")";
+        } catch (Exception ignored) { }
+        ModelStore.Spec spec = activeSpec();
+        aboutText.setText("Ghost Hands " + ver
+                + "\nModel: " + spec.displayName + " · " + spec.size
+                + " bytes"
+                + "\nSource: github.com/littlestjames82-sys/"
+                + "ghost-hands-mobile");
+    }
+
+    // ---- the handlers: mutate the model, persist, refresh ----
+
+    private void onDefaultPackPicked(String id) {
+        settings.defaultPackId = id;
+        // The stored default is also the standing choice a plain
+        // run starts from (a saved goal loaded afterwards still
+        // overrides it for that goal, as it always has).
+        currentPackId = id;
+        persistSettings();
+        refreshSettingsUi();
+        feed("Default policy: " + id + " (applies from the next run).");
+    }
+
+    private void onMaxStepsPicked(int steps) {
+        settings.maxSteps = steps;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onChunkPrefPicked(int pref) {
+        settings.chunkPref = pref;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onShotsKeptPicked(int kept) {
+        settings.shotsKept = kept;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onCopilotToggled() {
+        settings.copilotOn = !settings.copilotOn;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onAutoReadToggled() {
+        settings.autoReadOn = !settings.autoReadOn;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onSettleToggled() {
+        settings.settleOn = !settings.settleOn;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onVoiceToggled() {
+        settings.voiceOn = !settings.voiceOn;
+        persistSettings();
+        refreshSettingsUi();
+        // A UI gate: the mic chip appears/disappears at once.
+        refreshMicUi();
+    }
+
+    private void onSpeakFinishToggled() {
+        settings.speakOnFinish = !settings.speakOnFinish;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    private void onBuzzToggled() {
+        settings.buzzOn = !settings.buzzOn;
+        persistSettings();
+        refreshSettingsUi();
+    }
+
+    /** The home page field commits on Done or on losing focus:
+     *  the value is normalized through the model (Settings);
+     *  an invalid value keeps the old setting and says so, a
+     *  valid one persists and applies at the next launch. */
+    private void commitHomePage() {
+        if (homeEdit == null || settings == null) return;
+        String norm = Settings.normalizeHomePage(
+                homeEdit.getText().toString());
+        if (norm == null) {
+            Toast.makeText(this, "That doesn't look like a web "
+                    + "address — home page unchanged",
+                    Toast.LENGTH_SHORT).show();
+            homeEdit.setText(settings.homePage);
+            return;
+        }
+        if (!norm.equals(settings.homePage)) {
+            settings.homePage = norm;
+            persistSettings();
+            feed(norm.length() > 0
+                    ? "Home page set: " + norm
+                            + " (loads at the next launch)."
+                    : "Home page cleared — nothing loads at launch.");
+        }
+        homeEdit.setText(norm);
     }
 
     private void startDownload() {
@@ -1972,7 +2521,11 @@ public class MainActivity extends Activity {
                 for (int i = 0; i < files.length; i++) {
                     if (files[i].isFile()) names.add(files[i].getName());
                 }
-                List<String> old = Shots.excess(names, Shots.MAX_KEPT);
+                // v3.4 (setting l): the retention count is the
+                // settings' number, handed to Shots' policy.
+                List<String> old = Shots.excess(names,
+                        settings != null ? settings.shotsKept
+                                : Shots.MAX_KEPT);
                 for (int i = 0; i < old.size(); i++) {
                     new File(dir, old.get(i)).delete();
                 }
@@ -2046,7 +2599,27 @@ public class MainActivity extends Activity {
             } else if (!inForeground) {
                 Alerts.postRunFinished(MainActivity.this, fc,
                         trailFile.getAbsolutePath());
-                vibrateFinish();
+                // v3.4 (setting k): the finish buzz gates THIS
+                // vibrate — the ordinary run-finished buzz. The
+                // watch-changed vibrate above is deliberately
+                // not gated: a change is the watch's core signal.
+                if (settings == null || settings.buzzOn) {
+                    vibrateFinish();
+                }
+            }
+            // v3.4 (setting j): speak the answer. The exact
+            // rule: the setting is on, the app is in the
+            // foreground, and the run ended DONE (its card
+            // carries a real answer). Errors, stuck, stopped
+            // and budget endings — and every off-screen finish —
+            // are never spoken.
+            if (settings != null && settings.speakOnFinish
+                    && inForeground && "done".equals(fc.outcome)) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        autoSpeakCard(fc);
+                    }
+                });
             }
         }
         // v2.6: every path that reaches here ended normally
@@ -2491,8 +3064,12 @@ public class MainActivity extends Activity {
 
         pack = PolicyPacks.loadPack(currentPackId);
         hands = new WebHands();
+        // v3.4: replays take the settings' run parameters too —
+        // one knob set governs every Agent the app builds.
         agent = new Agent(hands, engine, pack, currentTrail,
-                agentUi(), activeModelId, grammarOn);
+                agentUi(), activeModelId, grammarOn,
+                settings.maxSteps, settings.copilotOn,
+                settings.autoReadOn, settings.chunkPref);
         final Agent runAgent = agent;
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
@@ -2570,29 +3147,7 @@ public class MainActivity extends Activity {
             @Override public void onInit(int status) {
                 if (status == TextToSpeech.SUCCESS) {
                     ttsReady = true;
-                    tts.setOnUtteranceProgressListener(
-                            new UtteranceProgressListener() {
-                                @Override public void onStart(
-                                        String utteranceId) { }
-                                @Override public void onDone(
-                                        String utteranceId) {
-                                    ttsSpeaking = false;
-                                    runOnUiThread(new Runnable() {
-                                        @Override public void run() {
-                                            refreshListenUi();
-                                        }
-                                    });
-                                }
-                                @Override public void onError(
-                                        String utteranceId) {
-                                    ttsSpeaking = false;
-                                    runOnUiThread(new Runnable() {
-                                        @Override public void run() {
-                                            refreshListenUi();
-                                        }
-                                    });
-                                }
-                            });
+                    installTtsListener();
                     refreshListenUi();
                     speakCard();
                 } else {
@@ -2607,14 +3162,78 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** The engine's progress listener — installed once, at
+     *  init, whichever path built the engine: speaking state
+     *  lands in ttsSpeaking and the Listen button follows. */
+    private void installTtsListener() {
+        tts.setOnUtteranceProgressListener(
+                new UtteranceProgressListener() {
+                    @Override public void onStart(
+                            String utteranceId) { }
+                    @Override public void onDone(
+                            String utteranceId) {
+                        ttsSpeaking = false;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                refreshListenUi();
+                            }
+                        });
+                    }
+                    @Override public void onError(
+                            String utteranceId) {
+                        ttsSpeaking = false;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                refreshListenUi();
+                            }
+                        });
+                    }
+                });
+    }
+
     private void speakCard() {
-        if (tts == null || !ttsReady || lastCard == null) return;
-        String text = SpeakText.of(lastCard);
+        speakCard(lastCard);
+    }
+
+    /** Speak a specific card (v3.4: the auto-speak path speaks
+     *  the run's own end card, which is also lastCard — but the
+     *  parameter keeps the two paths honest about WHICH card). */
+    private void speakCard(AnswerCard card) {
+        if (tts == null || !ttsReady || card == null) return;
+        String text = SpeakText.of(card);
         if (text.length() == 0) return;
         int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null,
                 "ghosthands-card");
         if (r == TextToSpeech.SUCCESS) ttsSpeaking = true;
         refreshListenUi();
+    }
+
+    /** v3.4 (setting j): the quiet auto-speak — the same engine
+     *  and formatter as Listen, with none of Listen's toasts: if
+     *  speech cannot start, it simply does not happen. Called on
+     *  the UI thread from finishRunUi, under the rule stated
+     *  there (setting on, foreground, done answer). */
+    private void autoSpeakCard(final AnswerCard card) {
+        if (card == null || ttsFailed) return;
+        if (tts != null && ttsReady) {
+            speakCard(card);
+            return;
+        }
+        if (tts != null) return; // still starting: stay quiet
+        tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override public void onInit(int status) {
+                if (status == TextToSpeech.SUCCESS) {
+                    ttsReady = true;
+                    installTtsListener();
+                    refreshListenUi();
+                    speakCard(card);
+                } else {
+                    ttsFailed = true;
+                    ttsSpeaking = false;
+                    refreshListenUi();
+                }
+            }
+        });
     }
 
     // ---------------- v3.3: the co-pilot's tap ------------------
@@ -2708,8 +3327,13 @@ public class MainActivity extends Activity {
         pack = PolicyPacks.loadPack(scheduleLaunched
                 ? "readonly" : currentPackId);
         hands = new WebHands();
+        // v3.4: the run takes its step budget, co-pilot gate,
+        // auto-read and chunk preference from the settings model
+        // — the knobs captured here, at Start, for the whole run.
         agent = new Agent(hands, engine, pack, currentTrail, ui,
-                activeModelId, grammarOn);
+                activeModelId, grammarOn,
+                settings.maxSteps, settings.copilotOn,
+                settings.autoReadOn, settings.chunkPref);
         final Agent runAgent = agent;
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
@@ -3194,6 +3818,14 @@ public class MainActivity extends Activity {
 
     private void refreshMicUi() {
         if (micBtn == null) return;
+        // v3.4 (setting i): voice goals off hides the chip
+        // entirely — the goal field is keyboard-only, and the
+        // recognizer is never touched.
+        if (settings != null && !settings.voiceOn) {
+            micBtn.setVisibility(View.GONE);
+            return;
+        }
+        micBtn.setVisibility(View.VISIBLE);
         boolean avail = SpeechRecognizer.isRecognitionAvailable(this);
         micBtn.setText(VoiceGoal.buttonLabel(avail, speechListening));
         micBtn.setEnabled(VoiceGoal.buttonEnabled(avail, speechListening));
@@ -3550,7 +4182,13 @@ public class MainActivity extends Activity {
         private void settlePageText() throws Exception {
             int[] probes = new int[Eyes.SETTLE_MAX_PROBES];
             int n = 0;
-            while (n < Eyes.SETTLE_MAX_PROBES) {
+            // v3.4 (setting h): the loop's gate is the pure
+            // Eyes.settleMayProbe — the budget AND the density-
+            // settle setting together. Off, zero probes are
+            // taken and the read proceeds unsettled; on, the
+            // loop below is the v2.8 loop, probe for probe.
+            boolean settleOn = settings == null || settings.settleOn;
+            while (Eyes.settleMayProbe(settleOn, n)) {
                 int len = Eyes.parseTextLength(
                         callJs(Eyes.pageTextLengthJs(), 8000));
                 if (len < 0) return;

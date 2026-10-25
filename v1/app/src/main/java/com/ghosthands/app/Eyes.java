@@ -1778,6 +1778,22 @@ public final class Eyes {
         return SETTLE_WAIT;
     }
 
+    /**
+     * v3.4: may the settle loop take another probe? Two gates,
+     * judged together so the Activity's loop is a while over
+     * this one predicate: the loop's own budget
+     * (SETTLE_MAX_PROBES), and the user's density-settle
+     * setting — off, the loop takes NO probes at all and the
+     * read proceeds unsettled, which is what "off skips the
+     * settle probes" means in code. With the setting on, this
+     * reduces to the budget alone and the v2.8 loop's behaviour
+     * is unchanged, probe for probe.
+     */
+    public static boolean settleMayProbe(boolean enabled, int probesTaken) {
+        return enabled && probesTaken >= 0
+                && probesTaken < SETTLE_MAX_PROBES;
+    }
+
     private static String str(Object o) {
         return (o instanceof String) ? (String) o : "";
     }

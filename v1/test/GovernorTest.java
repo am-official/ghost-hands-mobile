@@ -13,6 +13,7 @@ import com.ghosthands.app.RelevanceGuard;
 import com.ghosthands.app.Routes;
 import com.ghosthands.app.SavedGoals;
 import com.ghosthands.app.Scratchpad;
+import com.ghosthands.app.Settings;
 import com.ghosthands.app.Shots;
 import com.ghosthands.app.SpeakText;
 import com.ghosthands.app.VoiceGoal;
@@ -7424,6 +7425,591 @@ public class GovernorTest {
                                 false, false))
                         && SpeakText.buttonEnabled(true)
                         && !SpeakText.buttonEnabled(false)),
+                Boolean.TRUE);
+
+        // ================= v3.4: settings, in an accordion =========
+
+        // -- the Settings model: defaults from nothing stored ------
+        Settings def34 = Settings.fromMap(
+                new java.util.HashMap<String, String>());
+        check("settings: defaults — the Q5 brain, grammar OFF",
+                Boolean.valueOf("q5_k_m".equals(def34.modelId)
+                        && !def34.grammarOn),
+                Boolean.TRUE);
+        check("settings: defaults — standard pack, 25 steps",
+                Boolean.valueOf("standard".equals(def34.defaultPackId)
+                        && def34.maxSteps == 25),
+                Boolean.TRUE);
+        check("settings: defaults — the toggles (speak is the "
+                        + "one default-off)",
+                Boolean.valueOf(def34.copilotOn && def34.autoReadOn
+                        && def34.settleOn && def34.voiceOn
+                        && def34.buzzOn && !def34.speakOnFinish),
+                Boolean.TRUE);
+        check("settings: defaults — Auto chunks, 20 shots kept, "
+                        + "no home page",
+                Boolean.valueOf(def34.chunkPref == Settings.CHUNK_AUTO
+                        && def34.shotsKept == 20
+                        && def34.homePage.length() == 0),
+                Boolean.TRUE);
+        check("settings: a null map is all defaults too",
+                Boolean.valueOf(Settings.fromMap(null).maxSteps == 25
+                        && !Settings.fromMap(null).grammarOn),
+                Boolean.TRUE);
+
+        // -- clamping: strange stored values land on real choices --
+        java.util.Map<String, String> clamp34 =
+                new java.util.HashMap<String, String>();
+        clamp34.put(Settings.KEY_MAX_STEPS, "7");
+        check("settings clamp: 7 steps snaps up to 10",
+                Integer.valueOf(Settings.fromMap(clamp34).maxSteps),
+                Integer.valueOf(10));
+        clamp34.put(Settings.KEY_MAX_STEPS, "20");
+        check("settings clamp: 20 steps snaps to 25",
+                Integer.valueOf(Settings.fromMap(clamp34).maxSteps),
+                Integer.valueOf(25));
+        clamp34.put(Settings.KEY_MAX_STEPS, "99");
+        check("settings clamp: 99 steps snaps down to 40",
+                Integer.valueOf(Settings.fromMap(clamp34).maxSteps),
+                Integer.valueOf(40));
+        clamp34.put(Settings.KEY_MAX_STEPS, "abc");
+        check("settings clamp: a non-number of steps is the "
+                        + "default 25",
+                Integer.valueOf(Settings.fromMap(clamp34).maxSteps),
+                Integer.valueOf(25));
+        clamp34.put(Settings.KEY_SHOTS_KEPT, "3");
+        check("settings clamp: 3 shots snaps up to 10",
+                Integer.valueOf(Settings.fromMap(clamp34).shotsKept),
+                Integer.valueOf(10));
+        clamp34.put(Settings.KEY_SHOTS_KEPT, "30");
+        check("settings clamp: 30 shots snaps to 20",
+                Integer.valueOf(Settings.fromMap(clamp34).shotsKept),
+                Integer.valueOf(20));
+        clamp34.put(Settings.KEY_SHOTS_KEPT, "80");
+        check("settings clamp: 80 shots snaps down to 50",
+                Integer.valueOf(Settings.fromMap(clamp34).shotsKept),
+                Integer.valueOf(50));
+        clamp34.put(Settings.KEY_DEFAULT_PACK, "STRICT");
+        check("settings clamp: a pack name resolves "
+                        + "case-insensitively",
+                Settings.fromMap(clamp34).defaultPackId, "strict");
+        clamp34.put(Settings.KEY_DEFAULT_PACK, "bogus");
+        check("settings clamp: an unknown pack is standard",
+                Settings.fromMap(clamp34).defaultPackId, "standard");
+        clamp34.put(Settings.KEY_CHUNK_PREF, "weird");
+        check("settings clamp: an unknown chunk preference is "
+                        + "Auto",
+                Integer.valueOf(Settings.fromMap(clamp34).chunkPref),
+                Integer.valueOf(Settings.CHUNK_AUTO));
+        clamp34.put(Settings.KEY_COPILOT, "0");
+        check("settings clamp: boolean spellings — 0 is off",
+                Boolean.valueOf(Settings.fromMap(clamp34).copilotOn),
+                Boolean.FALSE);
+        clamp34.put(Settings.KEY_COPILOT, "junk");
+        check("settings clamp: a junk boolean is the default",
+                Boolean.valueOf(Settings.fromMap(clamp34).copilotOn),
+                Boolean.TRUE);
+
+        // -- round-trip: a fully non-default model survives --------
+        Settings custom34 = new Settings();
+        custom34.modelId = "q4_k_m";
+        custom34.grammarOn = true;
+        custom34.defaultPackId = "strict";
+        custom34.maxSteps = 40;
+        custom34.copilotOn = false;
+        custom34.autoReadOn = false;
+        custom34.chunkPref = Settings.CHUNK_SMALL;
+        custom34.settleOn = false;
+        custom34.voiceOn = false;
+        custom34.speakOnFinish = true;
+        custom34.buzzOn = false;
+        custom34.shotsKept = 50;
+        custom34.homePage = "https://example.com/start";
+        java.util.Map<String, String> wire34 = custom34.toMap();
+        Settings back34 = Settings.fromMap(wire34);
+        check("settings: a fully non-default model round-trips "
+                        + "field for field",
+                Boolean.valueOf("q4_k_m".equals(back34.modelId)
+                        && back34.grammarOn
+                        && "strict".equals(back34.defaultPackId)
+                        && back34.maxSteps == 40
+                        && !back34.copilotOn && !back34.autoReadOn
+                        && back34.chunkPref == Settings.CHUNK_SMALL
+                        && !back34.settleOn && !back34.voiceOn
+                        && back34.speakOnFinish && !back34.buzzOn
+                        && back34.shotsKept == 50
+                        && "https://example.com/start"
+                                .equals(back34.homePage)),
+                Boolean.TRUE);
+        check("settings: the round trip is a fixed point",
+                back34.toMap(), wire34);
+        check("settings: toMap covers exactly the model's keys",
+                Integer.valueOf(wire34.size()),
+                Integer.valueOf(Settings.ALL_KEYS.length));
+
+        // -- migration: pre-accordion prefs read identically -------
+        java.util.Map<String, String> legacy34 =
+                new java.util.HashMap<String, String>();
+        legacy34.put("model_id", "q4_k_m");
+        legacy34.put("grammar_on", "on");
+        Settings mig34 = Settings.fromMap(legacy34);
+        check("settings migration: values stored by the old "
+                        + "inline controls read identically "
+                        + "through the model",
+                Boolean.valueOf("q4_k_m".equals(mig34.modelId)
+                        && mig34.grammarOn),
+                Boolean.TRUE);
+        legacy34.put("grammar_on", "off");
+        check("settings migration: grammar off reads off",
+                Boolean.valueOf(!Settings.fromMap(legacy34).grammarOn),
+                Boolean.TRUE);
+        legacy34.put("grammar_on", "garbage");
+        check("settings migration: a strange grammar value is "
+                        + "OFF, never on (the v2.6.1 rule, kept)",
+                Boolean.valueOf(!Settings.fromMap(legacy34).grammarOn),
+                Boolean.TRUE);
+        check("settings migration: the model writes the legacy "
+                        + "keys in the legacy encodings",
+                Boolean.valueOf("on".equals(wire34.get("grammar_on"))
+                        && "q4_k_m".equals(wire34.get("model_id"))),
+                Boolean.TRUE);
+
+        // -- home page parsing --------------------------------------
+        check("home page: blank stays blank (nothing loads)",
+                Settings.normalizeHomePage(""), "");
+        check("home page: whitespace-only is blank too",
+                Settings.normalizeHomePage("   "), "");
+        check("home page: a bare host gains https",
+                Settings.normalizeHomePage("example.com"),
+                "https://example.com");
+        check("home page: a full URL passes through untouched",
+                Settings.normalizeHomePage("https://news.site/x"),
+                "https://news.site/x");
+        check("home page: words with spaces are not a URL",
+                Settings.normalizeHomePage("not a url"), null);
+        check("home page: a single bare word is not a URL",
+                Settings.normalizeHomePage("example"), null);
+        check("home page: an IP with a port is a page",
+                Settings.normalizeHomePage("192.168.1.1:8080"),
+                "https://192.168.1.1:8080");
+        java.util.Map<String, String> badHome34 =
+                new java.util.HashMap<String, String>();
+        badHome34.put(Settings.KEY_HOME_PAGE, "not a url");
+        check("home page: a bad stored value resolves to blank "
+                        + "in the model, never to a bad load",
+                Settings.fromMap(badHome34).homePage, "");
+
+        // -- chunk preference: the pure consultation ---------------
+        check("settings: chunk forcing is exact at the pure "
+                        + "level (Large/Small win over density, "
+                        + "Auto is the v2.9 judgement, an unknown "
+                        + "preference is Auto)",
+                Boolean.valueOf(
+                        Settings.readChunkChars(
+                                Settings.CHUNK_LARGE, 5000) == 2400
+                        && Settings.readChunkChars(
+                                Settings.CHUNK_SMALL, 10) == 1200
+                        && Settings.readChunkChars(
+                                Settings.CHUNK_AUTO, 10) == 2400
+                        && Settings.readChunkChars(
+                                Settings.CHUNK_AUTO, 5000) == 1200
+                        && Settings.readChunkChars(99, 10) == 2400),
+                Boolean.TRUE);
+
+        // -- settle gate: the pure half of setting (h) -------------
+        check("settle gate: off takes no probes at all",
+                Boolean.valueOf(!Eyes.settleMayProbe(false, 0)
+                        && !Eyes.settleMayProbe(false, 1)),
+                Boolean.TRUE);
+        check("settle gate: on is the v2.8 budget, probe for "
+                        + "probe",
+                Boolean.valueOf(Eyes.settleMayProbe(true, 0)
+                        && Eyes.settleMayProbe(true, 1)
+                        && Eyes.settleMayProbe(true, 2)
+                        && !Eyes.settleMayProbe(true, 3)),
+                Boolean.TRUE);
+
+        // -- retention: the number reaches the Shots policy --------
+        java.util.List<String> names34 =
+                new java.util.ArrayList<String>();
+        for (int i = 0; i < 25; i++) names34.add("shot-" + i + ".jpg");
+        java.util.Map<String, String> keep34 =
+                new java.util.HashMap<String, String>();
+        keep34.put(Settings.KEY_SHOTS_KEPT, "10");
+        check("settings loop: the stored retention number "
+                        + "drives the Shots policy verbatim (25 "
+                        + "shots, keep 10, 15 excess)",
+                Integer.valueOf(Shots.excess(names34,
+                        Settings.fromMap(keep34).shotsKept).size()),
+                Integer.valueOf(15));
+        keep34.put(Settings.KEY_SHOTS_KEPT, "50");
+        check("settings loop: keep 50 of 25 leaves nothing "
+                        + "excess",
+                Integer.valueOf(Shots.excess(names34,
+                        Settings.fromMap(keep34).shotsKept).size()),
+                Integer.valueOf(0));
+
+        // -- max steps, threaded: a scripted run stops at the cap --
+        final int[] scrollCalls = {0};
+        ModelEngine scrollEngine = new ModelEngine() {
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                scrollCalls[0]++;
+                return "{\"action\":\"scroll\",\"dir\":\"down\"}";
+            }
+        };
+        com.ghosthands.app.Trail budgetTrail =
+                new com.ghosthands.app.Trail(null);
+        new Agent(stubHands, scrollEngine,
+                PolicyPacks.loadPack("standard"), budgetTrail,
+                stubUi, "q5_k_m", false, 3, true, true,
+                Settings.CHUNK_AUTO).run("Scroll the example page");
+        String budgetStop = null;
+        String budgetMax = null;
+        for (java.util.Map<String, Object> ev : budgetTrail.events()) {
+            String t = String.valueOf(ev.get("type"));
+            if ("stop".equals(t)) {
+                budgetStop = String.valueOf(ev.get("reason"));
+            }
+            if ("run".equals(t)) {
+                budgetMax = String.valueOf(ev.get("max_steps"));
+            }
+        }
+        check("settings loop: a 3-step budget stops the run at "
+                        + "the cap, the cap on the run record",
+                Boolean.valueOf("budget".equals(budgetStop)
+                        && "3".equals(budgetMax)
+                        && scrollCalls[0] == 3),
+                Boolean.TRUE);
+        scrollCalls[0] = 0;
+        com.ghosthands.app.Trail stuckTrail34 =
+                new com.ghosthands.app.Trail(null);
+        new Agent(stubHands, scrollEngine,
+                PolicyPacks.loadPack("standard"), stuckTrail34,
+                stubUi, "q5_k_m", false, 25, true, true,
+                Settings.CHUNK_AUTO).run("Scroll the example page");
+        String stuckStop34 = null;
+        for (java.util.Map<String, Object> ev : stuckTrail34.events()) {
+            if ("stop".equals(String.valueOf(ev.get("type")))) {
+                stuckStop34 = String.valueOf(ev.get("reason"));
+            }
+        }
+        check("settings loop: the same script at the default "
+                        + "budget dies stuck long before 25 (the "
+                        + "cap, not the script, ended the run "
+                        + "above)",
+                Boolean.valueOf("stuck".equals(stuckStop34)
+                        && scrollCalls[0] == 3),
+                Boolean.TRUE);
+
+        // -- co-pilot gate: off means no offer is ever made --------
+        final int[] gateTaps = {0};
+        Agent.Ui gateUi = new Agent.Ui() {
+            @Override public void feed(String line) { }
+            @Override public void status(String s) { }
+            @Override public boolean approve(GhAction action,
+                    Governor.Decision decision, String describe) {
+                return true;
+            }
+            @Override public boolean stopRequested() { return false; }
+            @Override public boolean foreground() { return true; }
+            @Override public ElementInfo awaitUserTap(int step,
+                    long timeoutMs) {
+                gateTaps[0]++;
+                return elx(4, "a", "Zebra",
+                        "https://example.org/zebra");
+            }
+            @Override public boolean awaitUserResume(int step,
+                    String message, long timeoutMs) { return false; }
+        };
+        ModelEngine gateOffEngine = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"tap\",\"el\":1}";
+                if (calls == 2) return "{\"action\":\"tap\",\"el\":2}";
+                if (calls == 3) return "{\"action\":\"tap\",\"el\":3}";
+                return "{\"action\":\"done\",\"summary\":\"I found "
+                        + "the animals.\"}";
+            }
+        };
+        com.ghosthands.app.Trail gateTrail =
+                new com.ghosthands.app.Trail(null);
+        new Agent(animalsHands, gateOffEngine,
+                PolicyPacks.loadPack("standard"), gateTrail,
+                gateUi, "q5_k_m", false, 25, false, true,
+                Settings.CHUNK_AUTO).run(
+                "Open the animal pages and tell me which animals "
+                + "live there");
+        String gateStop = null;
+        boolean gateAssist = false;
+        for (java.util.Map<String, Object> ev : gateTrail.events()) {
+            String t = String.valueOf(ev.get("type"));
+            if ("stop".equals(t)) {
+                gateStop = String.valueOf(ev.get("reason"));
+            }
+            if ("assist".equals(t)) gateAssist = true;
+        }
+        check("settings loop: co-pilot OFF — the stuck run ends "
+                        + "stuck, no pause offered, no assist "
+                        + "recorded",
+                Boolean.valueOf("stuck".equals(gateStop)
+                        && gateTaps[0] == 0 && !gateAssist),
+                Boolean.TRUE);
+        ModelEngine gateOnEngine = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"tap\",\"el\":1}";
+                if (calls == 2) return "{\"action\":\"tap\",\"el\":2}";
+                if (calls == 3) return "{\"action\":\"tap\",\"el\":3}";
+                return "{\"action\":\"done\",\"summary\":\"I found "
+                        + "the red panda, blue whale and green frog "
+                        + "pages.\"}";
+            }
+        };
+        gateTaps[0] = 0;
+        com.ghosthands.app.Trail gateOnTrail =
+                new com.ghosthands.app.Trail(null);
+        new Agent(animalsHands, gateOnEngine,
+                PolicyPacks.loadPack("standard"), gateOnTrail,
+                gateUi, "q5_k_m", false, 25, true, true,
+                Settings.CHUNK_AUTO).run(
+                "Open the animal pages and tell me which animals "
+                + "live there");
+        String gateOnStop = null;
+        for (java.util.Map<String, Object> ev : gateOnTrail.events()) {
+            if ("stop".equals(String.valueOf(ev.get("type")))) {
+                gateOnStop = String.valueOf(ev.get("reason"));
+            }
+        }
+        check("settings loop: co-pilot ON through the new "
+                        + "constructor — the same run is rescued "
+                        + "and finishes done",
+                Boolean.valueOf("done".equals(gateOnStop)
+                        && gateTaps[0] == 1),
+                Boolean.TRUE);
+
+        // -- auto-read: off removes the arrival read, nothing else -
+        final Eyes.Perception clinchPage = Eyes.parseMap(
+                com.ghosthands.app.Json.quote(
+                        "{\"url\":\"https://en.wikipedia.org/wiki/"
+                        + "Clinch_River\",\"title\":\"Clinch River "
+                        + "- Wikipedia\",\"text\":\"The Clinch River "
+                        + "flows through Virginia and Tennessee.\","
+                        + "\"els\":[]}"));
+        final String clinchText = "The Clinch River is about 337 "
+                + "miles long. Norris Dam impounds the river "
+                + "near Norris, Tennessee.";
+        final int[] clinchReads = {0};
+        final int[] clinchChunkArg = {0};
+        Agent.Hands clinchHands = new Agent.Hands() {
+            @Override public Eyes.Perception perceive() {
+                return clinchPage;
+            }
+            @Override public String tap(int el) { return "ok"; }
+            @Override public String type(int el, String text) {
+                return "ok";
+            }
+            @Override public String gotoUrl(String url) {
+                return "ok";
+            }
+            @Override public String scroll(String dir) {
+                return "ok";
+            }
+            @Override public String back() { return "ok"; }
+            @Override public String search(String query) {
+                return "ok";
+            }
+            @Override public String read(int chunkChars) {
+                clinchReads[0]++;
+                clinchChunkArg[0] = chunkChars;
+                return Eyes.formatReadChunk(0, clinchText,
+                        clinchText.length());
+            }
+            @Override public String reload(String u) { return "ok"; }
+        };
+        ModelEngine clinchDoneEngine = new ModelEngine() {
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                return "{\"action\":\"done\",\"summary\":\"The "
+                        + "Clinch River is 337 miles long and "
+                        + "Norris Dam is on it.\"}";
+            }
+        };
+        com.ghosthands.app.Trail clinchOnTrail =
+                new com.ghosthands.app.Trail(null);
+        new Agent(clinchHands, clinchDoneEngine,
+                PolicyPacks.loadPack("standard"), clinchOnTrail,
+                stubUi, "q5_k_m").run(wikiGoal);
+        String clinchOnStop = null;
+        for (java.util.Map<String, Object> ev : clinchOnTrail.events()) {
+            if ("stop".equals(String.valueOf(ev.get("type")))) {
+                clinchOnStop = String.valueOf(ev.get("reason"));
+            }
+        }
+        check("settings loop: auto-read ON (the standing "
+                        + "default) — the arrival read fires once "
+                        + "and the done is grounded in it",
+                Boolean.valueOf(clinchReads[0] == 1
+                        && "done".equals(clinchOnStop)),
+                Boolean.TRUE);
+        clinchReads[0] = 0;
+        com.ghosthands.app.Trail clinchOffTrail =
+                new com.ghosthands.app.Trail(null);
+        new Agent(clinchHands, clinchDoneEngine,
+                PolicyPacks.loadPack("standard"), clinchOffTrail,
+                stubUi, "q5_k_m", false, 25, true, false,
+                Settings.CHUNK_AUTO).run(wikiGoal);
+        String clinchOffStop = null;
+        int clinchReadExecs = 0;
+        for (java.util.Map<String, Object> ev : clinchOffTrail.events()) {
+            String t = String.valueOf(ev.get("type"));
+            if ("stop".equals(t)) {
+                clinchOffStop = String.valueOf(ev.get("reason"));
+            }
+            if ("execute".equals(t)
+                    && String.valueOf(ev.get("action"))
+                            .contains("read")) {
+                clinchReadExecs++;
+            }
+        }
+        check("settings loop: auto-read OFF — no read happens "
+                        + "at all; the done still lands (the "
+                        + "grounding guard corrects it first, "
+                        + "then falls silent, as designed)",
+                Boolean.valueOf(clinchReads[0] == 0
+                        && clinchReadExecs == 0
+                        && "done".equals(clinchOffStop)),
+                Boolean.TRUE);
+
+        // -- chunk preference at loop level: forced both ways ------
+        ModelEngine readThenDoneClinch = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"read\"}";
+                return "{\"action\":\"done\",\"summary\":\"The "
+                        + "Clinch River is 337 miles long and "
+                        + "Norris Dam is on it.\"}";
+            }
+        };
+        clinchReads[0] = 0;
+        clinchChunkArg[0] = 0;
+        new Agent(clinchHands, readThenDoneClinch,
+                PolicyPacks.loadPack("standard"),
+                new com.ghosthands.app.Trail(null), stubUi,
+                "q5_k_m", false, 25, true, false,
+                Settings.CHUNK_SMALL).run(wikiGoal);
+        check("settings loop: chunk Small forces the small "
+                        + "chunk on a light page (Auto would serve "
+                        + "2400)",
+                Boolean.valueOf(clinchReads[0] == 1
+                        && clinchChunkArg[0] == 1200),
+                Boolean.TRUE);
+        ModelEngine readThenDoneClinch2 = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"read\"}";
+                return "{\"action\":\"done\",\"summary\":\"The "
+                        + "Clinch River is 337 miles long and "
+                        + "Norris Dam is on it.\"}";
+            }
+        };
+        clinchReads[0] = 0;
+        clinchChunkArg[0] = 0;
+        new Agent(clinchHands, readThenDoneClinch2,
+                PolicyPacks.loadPack("standard"),
+                new com.ghosthands.app.Trail(null), stubUi,
+                "q5_k_m", false, 25, true, false,
+                Settings.CHUNK_LARGE).run(wikiGoal);
+        check("settings loop: chunk Large serves the large "
+                        + "chunk on the same light page",
+                Boolean.valueOf(clinchReads[0] == 1
+                        && clinchChunkArg[0] == 2400),
+                Boolean.TRUE);
+
+        // The dense field page: Auto serves small (v2.9), Large
+        // forces the big chunk through the same consultation.
+        final String wxText34 = "Oakdale, Tennessee forecast. "
+                + "Tonight: clear, low 43 degrees. Rain chance "
+                + "10 percent today, no rain expected.";
+        final int[] wxReads = {0};
+        final int[] wxChunkArg = {0};
+        Agent.Hands wxHands34 = new Agent.Hands() {
+            @Override public Eyes.Perception perceive() {
+                return wxField;
+            }
+            @Override public String tap(int el) { return "ok"; }
+            @Override public String type(int el, String text) {
+                return "ok";
+            }
+            @Override public String gotoUrl(String url) {
+                return "ok";
+            }
+            @Override public String scroll(String dir) {
+                return "ok";
+            }
+            @Override public String back() { return "ok"; }
+            @Override public String search(String query) {
+                return "ok";
+            }
+            @Override public String read(int chunkChars) {
+                wxReads[0]++;
+                wxChunkArg[0] = chunkChars;
+                return Eyes.formatReadChunk(0, wxText34,
+                        wxText34.length());
+            }
+            @Override public String reload(String u) { return "ok"; }
+        };
+        ModelEngine wxReadDone = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"read\"}";
+                return "{\"action\":\"done\",\"summary\":\"Tonight's "
+                        + "low is 43 degrees with a 10 percent "
+                        + "chance of rain.\"}";
+            }
+        };
+        new Agent(wxHands34, wxReadDone,
+                PolicyPacks.loadPack("standard"),
+                new com.ghosthands.app.Trail(null), stubUi,
+                "q5_k_m", false, 25, true, false,
+                Settings.CHUNK_AUTO).run(rainGoal);
+        check("settings loop: chunk Auto on the dense field "
+                        + "page is the v2.9 judgement (1200)",
+                Boolean.valueOf(wxReads[0] >= 1
+                        && wxChunkArg[0] == 1200),
+                Boolean.TRUE);
+        ModelEngine wxReadDone2 = new ModelEngine() {
+            private int calls = 0;
+            @Override public synchronized String generate(
+                    String prompt, int maxTokens) {
+                calls++;
+                if (calls == 1) return "{\"action\":\"read\"}";
+                return "{\"action\":\"done\",\"summary\":\"Tonight's "
+                        + "low is 43 degrees with a 10 percent "
+                        + "chance of rain.\"}";
+            }
+        };
+        wxReads[0] = 0;
+        wxChunkArg[0] = 0;
+        new Agent(wxHands34, wxReadDone2,
+                PolicyPacks.loadPack("standard"),
+                new com.ghosthands.app.Trail(null), stubUi,
+                "q5_k_m", false, 25, true, false,
+                Settings.CHUNK_LARGE).run(rainGoal);
+        check("settings loop: chunk Large forces 2400 on the "
+                        + "dense page Auto would serve at 1200",
+                Boolean.valueOf(wxReads[0] >= 1
+                        && wxChunkArg[0] == 2400),
                 Boolean.TRUE);
 
         System.out.println();

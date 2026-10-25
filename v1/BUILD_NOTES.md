@@ -5,6 +5,129 @@ entirely on the phone. Foundation reused from the on-device proof
 (~/workspace/ghost-hands-mobile/BUILD_NOTES.md): same pinned llama.cpp
 b11382 Android build, same JNI shim design, same model download flow.
 
+## v3.4.0 (Oct 25, 2026) — Settings, In An Accordion
+
+Ryan's ask: "Add more settings and put them into a collapsible
+accordion." Host tests 910 -> 957 (+47, all green,
+foreground-verified). No new permissions (the set is v3.3's
+exactly: INTERNET, ACCESS_NETWORK_STATE, VIBRATE,
+RECORD_AUDIO). No new JS — the accordion and the home page ride
+framework views and WebView.loadUrl only, so the harness's
+emitted-script validation surface is unchanged. Grammar
+default still OFF; the crash A/B is untouched by this release.
+
+THE ONE-CONTROL RULE, FIRST. Every setting has exactly one
+control, living in the accordion. This app family's settings
+history is why: in the GhostIDE line a duplicated "autosave"
+control once shared a key and a view id with the real one and
+silently erased the setting. So the BRAIN chip row and the
+grammar switch (v2.6 / v2.6.1) MOVED into the accordion's BRAIN
+section — same views, same handlers, same refresh methods,
+same preference keys — and the model card keeps only status,
+progress and the download button. Nothing exists twice.
+
+THE MODEL UNDER THE UI. A new pure class, Settings, is the one
+source of truth: it resolves a whole settings object from the
+persisted string map (defaults, clamping, lenient booleans),
+and serializes back to the same map. The Activity reads every
+key once at launch (loadSettings) and writes the model's whole
+canonical map on every change (persistSettings) — one read
+path, one write path, no Apply button; a change persists in
+the tap that makes it. MIGRATION IS BY CONSTRUCTION: the two
+legacy keys keep their names ("model_id", "grammar_on") and
+their encodings — fromMap resolves them through ModelStore's
+own resolvers, toMap writes the grammar value through
+ModelStore.grammarPrefValue — so an upgrade's stored brain and
+grammar choices mean exactly what they meant to the inline
+controls, byte for byte (host-tested, including the standing
+rule that only an explicit "on" is on). activeModelId and
+grammarOn survive as mirrors the existing code keeps reading;
+the handlers refresh them from the model at every change.
+Choice numbers SNAP to the nearest offered value (ties to the
+smaller), so a hand-edited or future value lands on the
+closest thing the UI can show and the two can never disagree.
+
+THE ACCORDION. A SETTINGS card sits directly under the model
+card: six sections (BRAIN, AGENT, READING, VOICE & SPEECH,
+ALERTS, DATA) as tappable header rows with a chevron; one open
+at a time; expansion is an instant visibility toggle (no
+animation state to desync). An About block at the card's foot
+(not a setting): version name/code from PackageInfo, the
+active model + its file size, and the source repo URL as plain
+text, refreshed with the model UI. HONEST LIMIT: accordion
+expand/collapse and the settings screens' feel are
+device-verified UI — the host harness covers the model, the
+migration and every wired behavior below, not the tapping.
+
+THE SETTINGS, AND WHAT EACH ONE ACTUALLY DRIVES.
+(a) Model picker — relocated, unchanged semantics (idle-only,
+downloads kept). (b) Grammar lock — relocated, unchanged
+semantics (idle-only, default OFF, the A/B instrument: every
+decide/stop/run_summary trail record still carries
+"grammar_setting" and "model"). (c) Default policy pack — the
+four packs as chips; the pick sets currentPackId too, so a
+plain run starts from it; a loaded saved goal still brings its
+own pack and a schedule-launched run still forces readonly.
+(d) Max steps 10/25/40 — was the Agent.MAX_STEPS constant; now
+a run parameter on a new full Agent constructor (the old
+constructors delegate with the standing values, which is why
+all 910 prior tests behave byte-identically). The "run" trail
+record gains "max_steps", and the loop-exit stop names the
+budget, not the constant. Route replays take the same
+parameters — one knob set governs every Agent the app builds.
+(e) Co-pilot assists on/off — offerAssist's first statement;
+off, a stuck stop is a stuck stop, exactly pre-v3.3. (f)
+Auto-read on arrival on/off — one && at the v1.3 trigger.
+(g) Read chunk Auto/Large/Small — the loop's two chunk
+consultations now go through Settings.readChunkChars(pref,
+weight): Large is always 2400, Small always 1200, Auto is
+v2.9's density judgement untouched. (h) Density settle on/off —
+the settle loop's condition is the pure Eyes.settleMayProbe
+(setting AND the v2.8 probe budget); off takes zero probes and
+the read proceeds unsettled; on, the loop is probe-for-probe
+the v2.8 loop. (i) Voice goals on/off — refreshMicUi hides the
+mic chip outright; the recognizer is never touched while off.
+(j) Speak the answer on finish — the rule, exactly: the
+setting is on AND the app is in the foreground AND the run
+ended DONE (the end card's outcome is "done"). Errors, stuck,
+stopped and budget endings, and every off-screen finish, are
+never spoken. The path reuses v3.3's SpeakText + engine; the
+LISTEN button's own behavior is undisturbed (its utterance
+listener was extracted verbatim into installTtsListener,
+shared by both speak paths and installed once at engine init).
+(k) Finish buzz on/off — gates ONLY the off-screen finish
+vibrate in finishRunUi. The watch-CHANGED buzz is deliberately
+NOT gated (a change is the watch's core signal), and the
+section copy says so in the app. (l) Screenshot retention
+10/20/50 — captureRunScreenshot hands the number to
+Shots.excess, whose policy was already parameterized. (m)
+Home page — a text field committing on Done/focus-loss
+through Settings.normalizeHomePage: blank stays blank (nothing
+loads at launch, the historical behavior), a bare host gains
+"https://", whitespace inside / an empty host / a host with no
+dot, no port and not "localhost" is rejected (null) — the old
+value is kept and a toast says so. A set value loads once, in
+onCreate after the WebView exists, and is mirrored into the
+address bar.
+
+GUARDS ARE NOT SETTINGS-SHAPED. The gates that touch guards
+only ever REMOVE something: co-pilot off removes a rescue
+offer, auto-read off removes a convenience read, settle off
+removes polish probes, chunk forcing picks between the two
+chunk sizes the loop already used. No guard's math, cap or
+threshold is reachable from the accordion; the done-grounding
+guard, the repeat-action guard, the governor and every pack
+rule behave exactly as before at every setting combination
+(the auto-read-off host test watches the grounding guard
+correct an ungrounded done twice and then fall silent, by
+design, with the setting off).
+
+DEVICE PASS OWED (Ryan): open the accordion; flip model and
+grammar idle-only and mid-run (locked); set max steps 10 +
+co-pilot off and run the weather goal to feel the budget stop
+with no rescue; set a home page, relaunch, watch it load;
+speak-on-finish with a quick done run in the foreground.
+
 ## v3.3.0 (Oct 25, 2026) — The Remaining Four
 
 The four feature pitches held back from v3.0–v3.2, shipped

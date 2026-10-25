@@ -274,6 +274,20 @@ public class Agent {
      *  initialise still reports its own flag false). */
     private final boolean grammarSettingOn;
 
+    // v3.4 (settings): this run's rules from the settings model,
+    // handed in as plain values at construction — a run's rules
+    // cannot change mid-run, and the Activity stays the model's
+    // only owner. maxSteps replaces the MAX_STEPS constant in
+    // the loop (the constant remains the default); copilotEnabled
+    // gates offerAssist (off removes the v3.3 rescue, nothing
+    // else); autoReadEnabled gates the v1.3 arrival read;
+    // chunkPref is a Settings.CHUNK_* value the read-chunk
+    // choice consults (Settings.readChunkChars).
+    private final int maxSteps;
+    private final boolean copilotEnabled;
+    private final boolean autoReadEnabled;
+    private final int chunkPref;
+
     public volatile int currentStep = 0;
 
     // v2.5 (item 4 — run summary): the run's own tallies, reset at
@@ -322,6 +336,20 @@ public class Agent {
     public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
                  Trail trail, Ui ui, String modelId,
                  boolean grammarSettingOn) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                MAX_STEPS, true, true, Settings.CHUNK_AUTO);
+    }
+
+    /** v3.4: the full constructor — the settings-threaded one
+     *  the Activity uses. The older constructors delegate with
+     *  the standing defaults (25 steps, co-pilot on, auto-read
+     *  on, adaptive chunks), so every pre-v3.4 call site and
+     *  harness scenario behaves exactly as before. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref) {
         this.hands = hands;
         this.engine = engine;
         this.pack = pack;
@@ -331,6 +359,10 @@ public class Agent {
         this.modelId = (modelId == null || modelId.length() == 0)
                 ? "unknown" : modelId;
         this.grammarSettingOn = grammarSettingOn;
+        this.maxSteps = (maxSteps > 0) ? maxSteps : MAX_STEPS;
+        this.copilotEnabled = copilotEnabled;
+        this.autoReadEnabled = autoReadEnabled;
+        this.chunkPref = chunkPref;
     }
 
     public Trail trail() {
@@ -352,7 +384,8 @@ public class Agent {
                 "goal", goal,
                 "pack", pack.name,
                 "model", modelId,
-                "grammar_setting", Boolean.valueOf(grammarSettingOn)));
+                "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                "max_steps", Long.valueOf(maxSteps)));
         List<String> history = new ArrayList<String>();
         // v1.8: parallel to history — for a history entry that is a
         // read result, the URL of the page that was read (null for
@@ -442,9 +475,9 @@ public class Agent {
         // the stuck checks must not count a read as stagnation.
         String lastExecutedKind = null;
 
-        ui.status("Agent running (policy: " + pack.name + ", max " + MAX_STEPS + " steps)");
+        ui.status("Agent running (policy: " + pack.name + ", max " + maxSteps + " steps)");
         steps:
-        for (int step = 1; step <= MAX_STEPS; step++) {
+        for (int step = 1; step <= maxSteps; step++) {
             currentStep = step;
             if (ui.stopRequested()) {
                 stop(step, "stopped", "user pressed Stop");
@@ -644,7 +677,9 @@ public class Agent {
             // perception, settled before the auto-read below and
             // refreshed again inside the decide loop (a re-perceive
             // there replaces the page this was measured on).
-            currentReadChunkChars = readChunkChars(
+            // v3.4: the settings' chunk preference is consulted —
+            // Auto is this judgement, Large/Small force it.
+            currentReadChunkChars = Settings.readChunkChars(chunkPref,
                     perceptionWeight(perception, rendered));
 
             // -- auto-read on arrival (v1.3) --------------------------
@@ -661,7 +696,11 @@ public class Agent {
             // continues where the auto-read stopped. Best-effort: a
             // failed extraction never kills the run — the planner
             // can still call read itself.
-            if (RelevanceGuard.shouldAutoRead(goal, perception.title,
+            // v3.4: the auto-read is a setting (autoReadEnabled).
+            // Off, arrival is the planner's own business again —
+            // the read action, the completion state and every
+            // guard are untouched; only this convenience goes.
+            if (autoReadEnabled && RelevanceGuard.shouldAutoRead(goal, perception.title,
                     perception.url, autoReadUrls)) {
                 // v2.2: redundant auto-read suppression. This page
                 // was ALREADY read to the end this run (the planner
@@ -784,8 +823,9 @@ public class Agent {
                 // v2.9 (item 3): a race/stale re-decide replaced the
                 // perception at the bottom of this loop; the read
                 // chunk size follows the page now being decided
-                // against.
-                currentReadChunkChars = readChunkChars(
+                // against. v3.4: through the settings' preference,
+                // like the pre-loop choice above.
+                currentReadChunkChars = Settings.readChunkChars(chunkPref,
                         perceptionWeight(perception, rendered));
                 // -- decide --------------------------------------------------
                 // The auto-read section is shown only while the agent is
@@ -1713,7 +1753,7 @@ public class Agent {
                 break;
             }
         }
-        stop(MAX_STEPS, "budget", "step budget exhausted");
+        stop(maxSteps, "budget", "step budget exhausted");
     }
 
     /**
@@ -1810,6 +1850,12 @@ public class Agent {
     private boolean offerAssist(int step, String stuckSummary,
                                 List<String> history,
                                 List<String> historyReadUrls) {
+        // v3.4: the co-pilot setting gates the offer itself —
+        // off, a stuck stop is a stuck stop, exactly as it was
+        // before v3.3, and nothing about any guard changes.
+        if (!copilotEnabled) {
+            return false;
+        }
         if (!Copilot.eligible("stuck", assistsUsed, ui.foreground())) {
             return false;
         }
