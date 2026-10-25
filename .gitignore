@@ -1,0 +1,16 @@
+# Ghost Hands Mobile — local-only files, never committed
+# Signing keys (PRESERVE locally; losing them breaks app updates)
+*.keystore
+# On-device model binaries (downloaded at first launch, ~1+ GB)
+*.gguf
+# Build outputs
+*.apk
+*.idsig
+*.class
+out/
+**/out/
+native/llama-build/
+libs-arm64/
+# Lab scratch dependencies / compiled classes
+read-lab/node_modules/
+parity-lab/classes/
