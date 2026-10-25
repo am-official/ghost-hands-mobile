@@ -5407,6 +5407,32 @@ v1.1 limitations, honestly:
 
 ## Known limitations (v1)
 
+> **Status note (2026-10-25).** This list describes the v1.0.0 app
+> and is kept below exactly as written. Later releases have
+> superseded some of it; each entry names the release in
+> `CHANGELOG.md` and its section above:
+>
+> - "no prefix caching yet" (first item): superseded by v1.5.0
+>   (the speed release: prefix caching). The shim now reuses the
+>   KV for the shared prompt prefix and decodes only the suffix.
+> - "Downloads offered by pages are recorded in the trail but not
+>   saved": superseded by v3.16.0 (R8: Downloads, Documents, Page
+>   Watch). Downloads are judged by the Governor and, when allowed
+>   or approved, saved to an app-private store listed on the
+>   History screen.
+> - Choosing a `<select>` option as a "type" action: superseded by
+>   v3.9.0 (R1: The Forms Frontier Pack). Selects are perceived
+>   with their options, and the governed choose verb picks an
+>   option by its visible label.
+> - "One WebView, one tab": superseded by v3.15.0 (R7: Multi-Tab).
+>   Up to three tabs, one WebView per tab.
+> - "no self-healing re-find": superseded by v2.0.0 (the
+>   self-healing hands release), which re-finds a moved element by
+>   identity at execution time.
+>
+> Items not named here are left as written and have not been
+> re-checked against later releases.
+
 - Prompt processing is ~20 tok/s on the Moto G Stylus 2025, so each
   step costs roughly (prompt tokens / 20)s + a few seconds of
   generation. Prompts are kept lean (map capped at 40 elements /
