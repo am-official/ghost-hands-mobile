@@ -52,6 +52,26 @@ public final class Shots {
     }
 
     /**
+     * v3.7 (step screenshots): the file name for one step's
+     * photograph of a run — the trail's base name with
+     * "-step<N>" before the extension, so a run's step shots
+     * sort beside its end shot and each step's name is
+     * distinct. They live in the same store under the same
+     * retention policy (excess below counts every file in the
+     * store, step shots included). Null when there is no
+     * usable base name or the step is not a step (steps are
+     * numbered from 1).
+     */
+    public static String stepFileNameForTrail(String trailFileName,
+                                              int step) {
+        if (step < 1) return null;
+        String end = fileNameForTrail(trailFileName);
+        if (end == null) return null;
+        String base = end.substring(0, end.length() - ".jpg".length());
+        return base + "-step" + step + ".jpg";
+    }
+
+    /**
      * The names to delete so that only the newest `keep` of
      * `names` remain: the (size - keep) oldest by name order
      * (the names are timestamps, so name order is time order),

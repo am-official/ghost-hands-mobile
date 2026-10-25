@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ghost Hands</string>
+    <!-- v3.14 (R6): what Android Settings shows for the
+         accessibility spike's service at the consent surface. -->
+    <string name="a11y_service_description">Experimental Ghost Hands spike: lets the app sketch another app\'s screen layout and dispatch a tap, only from the Diagnostics probes and only while you keep this service and the in-app toggle on. It does nothing on its own.</string>
 </resources>

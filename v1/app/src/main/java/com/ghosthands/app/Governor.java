@@ -30,6 +30,15 @@ public class Governor {
     public static final String READONLY = "readonly";
     public static final String WRITE = "write";
     public static final String CONSEQUENTIAL = "consequential";
+    // v3.12 (R4): ask is its OWN class, deliberately outside the
+    // policy matrix. Asking the user a question changes nothing on
+    // any page, so it is always allowed under every pack —
+    // including readonly and seatbelt — and is never upgraded to
+    // consequential, however the question or the page is worded.
+    // It is not a write. (Named ASK_CLASS, not ASK: ASK above is
+    // the approval OUTCOME — the two "ask"s are different ideas
+    // that happen to share a word.)
+    public static final String ASK_CLASS = "ask";
 
     public static final String ALLOW = "allow";
     public static final String ASK = "ask";
@@ -165,10 +174,20 @@ public class Governor {
      */
     public String classify(GhAction action, ElementInfo element, String pageUrl) {
         String kind = action.action;
+        if ("ask".equals(kind)) {
+            // v3.12 (R4): ask is its OWN class, returned before any
+            // element or keyword logic can see the action — the
+            // question text and the element haystack can never make
+            // asking read as a write or a consequential move.
+            return ASK_CLASS;
+        }
         if ("done".equals(kind) || "stuck".equals(kind) || "wait".equals(kind)
                 || "scroll".equals(kind) || "back".equals(kind)
                 || "search".equals(kind) || "read".equals(kind)
-                || "note".equals(kind)) {
+                || "note".equals(kind)
+                || "open_tab".equals(kind) || "switch_tab".equals(kind)
+                || "close_tab".equals(kind)
+                || "read_file".equals(kind)) {
             // search (v1.1) performs a read-only web search: it perceives
             // the world, it does not change account/site state.
             // read (v1.2) extracts page text: pure perception.
@@ -177,6 +196,23 @@ public class Governor {
             // nothing on any page, account, or site changes — so it
             // is readonly and allowed under every pack, the readonly
             // pack (which schedules launch under) included.
+            // open_tab / switch_tab / close_tab (v3.15, R7) are
+            // NAVIGATION: they rearrange the browser's own tabs and
+            // change no state on any site — opening a tab loads a
+            // page exactly as goto does (goto is readonly), switching
+            // moves no page at all, and closing discards only local
+            // browsing state. They return here, before the keyword
+            // pass, so an open_tab url that merely smells (a path
+            // containing "pay") can never upgrade them: the url is
+            // still judged by the domain rules in evaluate(), like
+            // goto's.
+            // read_file (v3.16, R8) reads a document already in
+            // the app's own downloads store: it perceives a local
+            // file and changes nothing anywhere — not the file,
+            // not a page, not an account. It returns here too, so
+            // a document NAMED like money or destruction
+            // ("delete-taxes.csv") can never upgrade it: the
+            // name is a label, not a target.
             return READONLY;
         }
 
@@ -215,6 +251,20 @@ public class Governor {
             return (matchKeyword(haystack) != null) ? CONSEQUENTIAL : WRITE;
         }
 
+        // v3.9 (R1): choose (pick a select's option) and toggle
+        // (flip a checkbox, select a radio) are writes, judged
+        // exactly like type: they change form state in a
+        // reversible, ordinary way — allowed silently under
+        // standard, asked under strict, denied under readonly —
+        // and the same keyword smell (a target named like money
+        // or destruction) upgrades them to consequential, as it
+        // does a type. They never submit anything: a form's
+        // submit stays a tap on the submit control, consequential
+        // as always.
+        if ("choose".equals(kind) || "toggle".equals(kind)) {
+            return (matchKeyword(haystack) != null) ? CONSEQUENTIAL : WRITE;
+        }
+
         return WRITE;
     }
 
@@ -224,6 +274,16 @@ public class Governor {
     public Decision evaluate(GhAction action, ElementInfo element, String pageUrl) {
         String classification = classify(action, element, pageUrl);
         Policy policy = this.policy;
+
+        if (ASK_CLASS.equals(classification)) {
+            // v3.12 (R4): structural always-allow, decided BEFORE
+            // the deny-pattern pass and the domain rules can see
+            // the action — an ask has no target, no URL of its own
+            // and no page effect, so page state, allowlists and
+            // question wording can never gate asking. The reason
+            // string is pinned by the harness.
+            return new Decision(ASK_CLASS, ALLOW, "ask: always allowed");
+        }
 
         // Content deny-patterns first.
         if (!policy.denyPatterns.isEmpty()) {
@@ -254,10 +314,14 @@ public class Governor {
         }
 
         // Domain rules apply to every host this action can reach.
-        String effectiveUrl = "goto".equals(action.action) ? action.url : pageUrl;
+        // v3.15 (R7): open_tab reaches its url exactly as goto does,
+        // so the url is the effective one for domain purposes.
+        boolean urlBearing = "goto".equals(action.action)
+                || "open_tab".equals(action.action);
+        String effectiveUrl = urlBearing ? action.url : pageUrl;
         List<String> candidates = new ArrayList<String>();
         if (effectiveUrl != null) candidates.add(effectiveUrl);
-        if (action.url != null && "goto".equals(action.action)) {
+        if (action.url != null && urlBearing) {
             candidates.add(action.url);
         }
         if (element != null && "tap".equals(action.action)) {

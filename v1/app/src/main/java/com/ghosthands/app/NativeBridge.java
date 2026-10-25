@@ -27,18 +27,25 @@ package com.ghosthands.app;
  * v2.6.1: generate() takes the kill-switch flag — when useGrammar
  * is false the shim builds the pre-v2.4 greedy-only chain and never
  * creates the grammar sampler at all.
- * Context is 2048 tokens, 4 threads (the proof's on-device setting:
- * ~20 tok/s prompt, ~14 tok/s generation on a Moto G Stylus 2025).
+ * Context is 2048 tokens. The thread count arrives with loadModel
+ * (v3.6: the BRAIN setting — 4 remains the default, the proof's
+ * on-device setting: ~20 tok/s prompt, ~14 tok/s generation on a
+ * Moto G Stylus 2025) and is baked into the context at creation,
+ * so a change applies at the next load only.
+ * v3.6: generate() also takes the prefix-cache switch — when
+ * usePrefixCache is false the shim drops its cached prompt and
+ * evaluates every prompt in full, the pre-v1.5 behaviour.
  */
 public class NativeBridge {
     static {
         System.loadLibrary("ghhands");
     }
 
-    public static native long loadModel(String path);
+    public static native long loadModel(String path, int nThreads);
 
     public static native String[] generate(long handle, String prompt,
-                                           int maxTokens, boolean useGrammar);
+                                           int maxTokens, boolean useGrammar,
+                                           boolean usePrefixCache);
 
     public static native void freeModel(long handle);
 }

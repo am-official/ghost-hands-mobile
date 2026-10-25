@@ -1,10 +1,13 @@
-// ghproof.c -- Ghost Hands: tiny JNI shim over the llama.cpp C API
+// ghhands.c -- Ghost Hands: tiny JNI shim over the llama.cpp C API
 // (pinned tree b11382, MIT). Pure C; the llama.cpp API is C, so no C++
 // is needed here.
 //
 // Java side: com.ghosthands.app.NativeBridge
-//   loadModel(path)                       -> handle (jlong) or 0
-//   generate(handle, userPrompt, maxTok, useGrammar)  -> String[8]:
+//   loadModel(path, nThreads)             -> handle (jlong) or 0
+//       (v3.6: the BRAIN thread count, clamped to [1, 8] here and
+//       baked into the context at creation; applies at load only)
+//   generate(handle, userPrompt, maxTok, useGrammar, usePrefixCache)
+//                                         -> String[8]:
 //        [0] generated text (or "ERROR: ...")
 //        [1] prompt token count
 //        [2] prompt eval elapsed ms (v1.5: suffix-only when the
@@ -52,51 +55,50 @@ typedef struct {
 /* v2.4 GRAMMAR-LOCKED OUTPUT: a GBNF grammar (the pinned llama.h's
  * llama_sampler_init_grammar) constraining the planner's generation
  * to exactly ONE JSON object of the action shapes the Java side
- * parses. The field set is DERIVED from GhAction / PlannerParse --
- * tap{el}, type{el,text}, goto{url}, scroll{dir optional},
- * back{}, wait{ms optional}, search{query}, read{},
- * done{summary optional}, stuck{reason optional} -- with "action"
- * first, as the prompt contract and every worked example write it.
- * Strings accept arbitrary text (a done summary is prose) with the
- * standard JSON escapes; numbers here are the parser's integer
- * fields (el is 1-based, so elnum excludes 0). Range checks the
- * grammar cannot express (wait's clamp, el's existence) stay with
- * PlannerParse, which remains in force unchanged as the second
- * line of defense. The grammar constrains SYNTAX only: it can make
- * malformed JSON impossible, never a wrong action sensible.
+ * parses. The field set is DERIVED from GhAction / PlannerParse,
+ * with "action" first, as the prompt contract and every worked
+ * example write it. It grew with the action vocabulary: note
+ * (v2.x), choose/toggle (v3.9), ask (v3.12), the tab actions
+ * (v3.15), read_file (v3.16). The parser's non-blank fields ride
+ * nstring (v3.11's parity discipline: the grammar never emits a
+ * shape PlannerParse would reject); rule names use hyphens, not
+ * underscores -- the pinned GBNF parser's word characters are
+ * [a-zA-Z0-9-] (the v3.15 lesson). Strings accept arbitrary text
+ * (a done summary is prose) with the standard JSON escapes;
+ * numbers here are the parser's integer fields (el is 1-based,
+ * so elnum excludes 0). Range checks the grammar cannot express
+ * (wait's clamp, el's existence) stay with PlannerParse, which
+ * remains in force unchanged as the second line of defense. The
+ * grammar constrains SYNTAX only: it can make malformed JSON
+ * impossible, never a wrong action sensible.
  * Written in the pinned tree's own grammars/*.gbnf conventions.
  * v2.6.1: this grammar is only ever handed to llama.cpp when the
  * caller's kill-switch flag says ON; see the sampler chain in
  * generate(). */
 static const char * GH_ACTION_GRAMMAR =
     "root ::= ws obj ws\n"
-    "obj ::= tap | type | goto | scroll | back | wait | search"
-    " | read | done | stuck\n"
-    "tap ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"tap\\\"\""
-    " ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum ws \"}\"\n"
-    "type ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"type\\\"\""
-    " ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum ws \",\" ws"
-    " \"\\\"text\\\"\" ws \":\" ws string ws \"}\"\n"
-    "goto ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"goto\\\"\""
-    " ws \",\" ws \"\\\"url\\\"\" ws \":\" ws string ws \"}\"\n"
-    "scroll ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws"
-    " \"\\\"scroll\\\"\" (ws \",\" ws \"\\\"dir\\\"\" ws \":\" ws dir)?"
-    " ws \"}\"\n"
+    "obj ::= tap | type | goto | scroll | back | wait | search | read | done | stuck | choose | toggle | note | ask | open-tab | switch-tab | close-tab | read-file\n"
+    "choose ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"choose\\\"\" ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum ws \",\" ws \"\\\"text\\\"\" ws \":\" ws nstring ws \"}\"\n"
+    "toggle ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"toggle\\\"\" ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum (ws \",\" ws \"\\\"text\\\"\" ws \":\" ws string)? ws \"}\"\n"
+    "tap ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"tap\\\"\" ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum ws \"}\"\n"
+    "type ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"type\\\"\" ws \",\" ws \"\\\"el\\\"\" ws \":\" ws elnum ws \",\" ws \"\\\"text\\\"\" ws \":\" ws string ws \"}\"\n"
+    "goto ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"goto\\\"\" ws \",\" ws \"\\\"url\\\"\" ws \":\" ws nstring ws \"}\"\n"
+    "scroll ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"scroll\\\"\" (ws \",\" ws \"\\\"dir\\\"\" ws \":\" ws dir)? ws \"}\"\n"
     "dir ::= \"\\\"down\\\"\" | \"\\\"up\\\"\"\n"
-    "back ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"back\\\"\""
-    " ws \"}\"\n"
-    "wait ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"wait\\\"\""
-    " (ws \",\" ws \"\\\"ms\\\"\" ws \":\" ws posint)? ws \"}\"\n"
-    "search ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws"
-    " \"\\\"search\\\"\" ws \",\" ws \"\\\"query\\\"\" ws \":\" ws string"
-    " ws \"}\"\n"
-    "read ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"read\\\"\""
-    " ws \"}\"\n"
-    "done ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"done\\\"\""
-    " (ws \",\" ws \"\\\"summary\\\"\" ws \":\" ws string)? ws \"}\"\n"
-    "stuck ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"stuck\\\"\""
-    " (ws \",\" ws \"\\\"reason\\\"\" ws \":\" ws string)? ws \"}\"\n"
+    "back ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"back\\\"\" ws \"}\"\n"
+    "wait ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"wait\\\"\" (ws \",\" ws \"\\\"ms\\\"\" ws \":\" ws posint)? ws \"}\"\n"
+    "search ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"search\\\"\" ws \",\" ws \"\\\"query\\\"\" ws \":\" ws nstring ws \"}\"\n"
+    "read ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"read\\\"\" ws \"}\"\n"
+    "done ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"done\\\"\" (ws \",\" ws \"\\\"summary\\\"\" ws \":\" ws string)? ws \"}\"\n"
+    "stuck ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"stuck\\\"\" (ws \",\" ws \"\\\"reason\\\"\" ws \":\" ws string)? ws \"}\"\n"
+    "note ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"note\\\"\" ws \",\" ws \"\\\"fact\\\"\" ws \":\" ws nstring ws \"}\"\n"
+    "ask ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"ask\\\"\" ws \",\" ws \"\\\"question\\\"\" ws \":\" ws nstring ws \"}\"\n"
+    "open-tab ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"open_tab\\\"\" (ws \",\" ws \"\\\"url\\\"\" ws \":\" ws nstring)? ws \"}\"\n"
+    "switch-tab ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"switch_tab\\\"\" ws \",\" ws \"\\\"tab\\\"\" ws \":\" ws elnum ws \"}\"\n"
+    "close-tab ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"close_tab\\\"\" ws \",\" ws \"\\\"tab\\\"\" ws \":\" ws elnum ws \"}\"\n"
+    "read-file ::= \"{\" ws \"\\\"action\\\"\" ws \":\" ws \"\\\"read_file\\\"\" ws \",\" ws \"\\\"name\\\"\" ws \":\" ws nstring ws \"}\"\n"
     "string ::= \"\\\"\" schar* \"\\\"\"\n"
+    "nstring ::= \"\\\"\" schar schar* \"\\\"\"\n"
     "schar ::= [^\"\\\\\\x00-\\x1F] | \"\\\\\" esc\n"
     "esc ::= [\"\\\\/bfnrt] | \"u\" hex hex hex hex\n"
     "hex ::= [0-9a-fA-F]\n"
@@ -106,6 +108,22 @@ static const char * GH_ACTION_GRAMMAR =
 
 static int g_backend_ready = 0;
 
+static void set_result(JNIEnv * env, jobjectArray out, int idx,
+                       const char * s) {
+    jstring js = (*env)->NewStringUTF(env, s);
+    if (js != NULL) {
+        (*env)->SetObjectArrayElement(env, out, idx, js);
+        (*env)->DeleteLocalRef(env, js);
+    }
+}
+
+static void set_result_long(JNIEnv * env, jobjectArray out, int idx,
+                            long v) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%ld", v);
+    set_result(env, out, idx, buf);
+}
+
 static double now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -114,7 +132,8 @@ static double now_ms(void) {
 
 JNIEXPORT jlong JNICALL
 Java_com_ghosthands_app_NativeBridge_loadModel(JNIEnv * env, jclass clazz,
-                                                 jstring jpath) {
+                                                 jstring jpath,
+                                                 jint n_threads) {
     (void) clazz;
     const char * path = (*env)->GetStringUTFChars(env, jpath, NULL);
     if (path == NULL) return 0;
@@ -134,8 +153,12 @@ Java_com_ghosthands_app_NativeBridge_loadModel(JNIEnv * env, jclass clazz,
     cp.n_ctx = 2048;
     cp.n_batch = 512;
     cp.n_ubatch = 512;
-    cp.n_threads = 4;
-    cp.n_threads_batch = 4;
+    /* v3.6: the BRAIN setting's thread count, baked in at load;
+     * clamped to the range the context accepts. */
+    if (n_threads < 1) n_threads = 1;
+    if (n_threads > 8) n_threads = 8;
+    cp.n_threads = n_threads;
+    cp.n_threads_batch = n_threads;
     struct llama_context * ctx = llama_init_from_model(model, cp);
     if (ctx == NULL) {
         llama_model_free(model);
@@ -166,28 +189,13 @@ Java_com_ghosthands_app_NativeBridge_freeModel(JNIEnv * env, jclass clazz,
     free(h);
 }
 
-static void set_result(JNIEnv * env, jobjectArray out, int idx,
-                       const char * s) {
-    jstring js = (*env)->NewStringUTF(env, s);
-    if (js != NULL) {
-        (*env)->SetObjectArrayElement(env, out, idx, js);
-        (*env)->DeleteLocalRef(env, js);
-    }
-}
-
-static void set_result_long(JNIEnv * env, jobjectArray out, int idx,
-                            long v) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", v);
-    set_result(env, out, idx, buf);
-}
-
 JNIEXPORT jobjectArray JNICALL
 Java_com_ghosthands_app_NativeBridge_generate(JNIEnv * env, jclass clazz,
                                                 jlong jhandle,
                                                 jstring jprompt,
                                                 jint max_tokens,
-                                                jboolean use_grammar) {
+                                                jboolean use_grammar,
+                                                jboolean use_prefix_cache) {
     (void) clazz;
     jclass str_cls = (*env)->FindClass(env, "java/lang/String");
     jobjectArray out = (*env)->NewObjectArray(env, 8, str_cls, NULL);
@@ -278,6 +286,15 @@ Java_com_ghosthands_app_NativeBridge_generate(JNIEnv * env, jclass clazz,
      * the final prompt token is always (re)decoded so the sampler
      * sees fresh logits, so reuse is capped at n_prompt - 1. --- */
     int reuse = 0;
+    /* v3.6: the prefix-cache switch OFF drops the cached prompt
+     * and skips both the consult below and the refresh after
+     * prompt eval, so the call evaluates its prompt in full --
+     * the pre-v1.5 behaviour, kept for A/B diagnosis. */
+    if (use_prefix_cache != JNI_TRUE) {
+        free(h->cache);
+        h->cache = NULL;
+        h->cache_len = 0;
+    }
     if (h->cache != NULL && h->cache_len > 0) {
         int32_t limit = h->cache_len < n_prompt ? h->cache_len : n_prompt;
         int32_t lcp = 0;
@@ -354,7 +371,7 @@ Java_com_ghosthands_app_NativeBridge_generate(JNIEnv * env, jclass clazz,
     }
     double t1 = now_ms();
 
-    if (error == NULL) {
+    if (error == NULL && use_prefix_cache == JNI_TRUE) {
         /* The prompt's KV is now resident: remember its tokens as
          * the cache for the next call. A malloc failure just loses
          * the cache; it never fails the call. */
@@ -384,7 +401,13 @@ Java_com_ghosthands_app_NativeBridge_generate(JNIEnv * env, jclass clazz,
         char piece_buf[256];
         for (int g = 0; g < max_tokens; g++) {
             llama_token id = llama_sampler_sample(smpl, h->ctx, -1);
-            llama_sampler_accept(smpl, id);
+            /* v3.11: NO explicit accept here. At the pinned
+             * llama.cpp (b11382), llama_sampler_sample already
+             * accepts the token it returns into the chain; a
+             * second accept fed every token to the grammar
+             * sampler twice and emptied its stacks, killing the
+             * process on the first grammar-constrained token.
+             * GovernorTest pins this file free of the call. */
             if (llama_vocab_is_eog(vocab, id)) break;
 
             int n = llama_token_to_piece(vocab, id, piece_buf,

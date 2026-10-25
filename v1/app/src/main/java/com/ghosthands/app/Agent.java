@@ -85,6 +85,31 @@ import java.util.Set;
  * in AnswerCard (a non-done, note-less run's card carries the
  * last read's opening text as an excerpt instead of letting
  * the bare error line pose as the answer).
+ *
+ * v3.10 — Everything Train R2: perception deltas + planner
+ * styles. Perception stays full-fidelity (the stash, heal,
+ * fit ladder and trails all work from the complete map, as
+ * always); what changes is what the prompt carries per step.
+ * MapDelta chooses the block: the full map for a page's first
+ * sent perception and after any URL change; on later steps of
+ * the same page, a delta (added / changed / removed entries at
+ * their stable numbers, one line when nothing changed), with
+ * the full map as the fallback for identity ambiguity, any
+ * numbering mismatch, a delta no smaller than the full map,
+ * and a resync every 8 deltas. Each decide event records
+ * "map_block" so field runs prove the same savings the host
+ * harness measures. The planner styles (Settings, AGENT) are
+ * captured at Start as a run rule and recorded as "style":
+ * Balanced is this loop's standing posture byte-for-byte;
+ * Careful adds the verify-read done guard (a done on a page
+ * unread since the last navigation is corrected once) plus a
+ * note-as-you-go posture; Fast adds a directness posture and
+ * serves Small read chunks for the run unless the user set a
+ * chunk size (an explicit Reading setting always wins);
+ * Thorough adds a cross-check posture and extends the
+ * done-grounding demand: for a comparison-shaped goal, a
+ * done's numbers must come from reads on at least two
+ * distinct pages.
  */
 public class Agent {
 
@@ -200,6 +225,24 @@ public class Agent {
         Eyes.Perception perceive() throws Exception;
         String tap(int el) throws Exception;
         String type(int el, String text) throws Exception;
+        /** v3.9 (R1): pick a select's option by its visible label
+         *  (the choose action's body). A DEFAULT method,
+         *  deliberately — the same reasoning as Ui.onStepEnd:
+         *  hands implementations that predate the forms pack
+         *  stay complete without it, answering with the honest
+         *  error the loop records like any failed action. The
+         *  Activity's WebHands overrides it with the real,
+         *  self-healing implementation. */
+        default String choose(int el, String text) throws Exception {
+            return "error: choose is not supported by these hands";
+        }
+        /** v3.9 (R1): flip a checkbox, or select a radio choice
+         *  within its group (the toggle action's body; text
+         *  names the choice, null selects the element itself).
+         *  Default for the same reason as choose. */
+        default String toggle(int el, String text) throws Exception {
+            return "error: toggle is not supported by these hands";
+        }
         String gotoUrl(String url) throws Exception;
         String scroll(String dir) throws Exception;
         String back() throws Exception;
@@ -216,6 +259,56 @@ public class Agent {
          *  failed URL when the error page names one, else reload
          *  whatever is current. Returns a short ok/error string. */
         String reload(String failedUrl) throws Exception;
+        /** v3.15 (R7 — multi-tab): how many tabs the browser
+         *  currently holds. DEFAULT methods, deliberately — the
+         *  same reasoning as choose/toggle: hands implementations
+         *  that predate multi-tab stay complete as honest
+         *  single-tab hands (one tab, index 0, no url to report),
+         *  and their tab actions answer with the error the loop
+         *  records like any failed action. The Activity's
+         *  WebHands overrides all six with the real tab strip's
+         *  machinery. Tab indexes here are 0-based (the loop's
+         *  own bookkeeping); the planner-facing numbers in
+         *  actions, the roster and the trail are 1-based. */
+        default int tabCount() { return 1; }
+        /** v3.15: the 0-based index of the active tab. */
+        default int activeTabIndex() { return 0; }
+        /** v3.15: the current URL of tab index (0-based), or
+         *  null when the hands cannot say. */
+        default String tabUrl(int index) { return null; }
+        /** v3.15: open a new tab (at the optional url, null for
+         *  a blank tab), make it active, return ok/error. */
+        default String openTab(String url) throws Exception {
+            return "error: tabs are not supported by these hands";
+        }
+        /** v3.15: make tab index (0-based) the active tab. */
+        default String switchTab(int index) throws Exception {
+            return "error: tabs are not supported by these hands";
+        }
+        /** v3.15: close tab index (0-based). */
+        default String closeTab(int index) throws Exception {
+            return "error: tabs are not supported by these hands";
+        }
+        /** v3.16 (R8 — read documents): the names of the
+         *  readable documents in the app's downloads store,
+         *  as the prompt's Files line lists them. DEFAULT
+         *  methods, deliberately — the choose/toggle/tab
+         *  reasoning: hands that predate the documents pack
+         *  hold no documents (an empty list, so no Files line
+         *  ever renders and their prompts stay byte-identical)
+         *  and answer read_file with the honest error. The
+         *  Activity's WebHands overrides both with the real
+         *  store. */
+        default java.util.List<String> documentNames() {
+            return new java.util.ArrayList<String>();
+        }
+        /** v3.16: read one chunk of a stored document's
+         *  extracted text — the read action's chunked
+         *  discipline, walking a per-document cursor. */
+        default String readDocument(String name, int chunkChars)
+                throws Exception {
+            return "error: documents are not supported by these hands";
+        }
     }
 
     /** The screen: step feed, approvals, stop. approve() blocks the
@@ -251,6 +344,60 @@ public class Agent {
          *  presses Resume (true) or stops / the wait expires
          *  (false). Same timeout discipline as approve(). */
         boolean awaitUserResume(int step, String message, long timeoutMs);
+
+        /** v3.7 (step screenshots): a step has ended — its
+         *  action executed and its result is in history, so the
+         *  page shows what the step did. The loop calls this
+         *  only for runs made with step screenshots on (a plain
+         *  value captured at Start, like every run rule), once
+         *  per executed step, in agent runs and replays alike;
+         *  steps that ended the run leave through stop() and
+         *  are the run-end photograph's moment, not this one's.
+         *  A DEFAULT method, deliberately: the hook is purely
+         *  observational — no decision the loop makes depends
+         *  on it — so existing implementations stay complete
+         *  without it, and the Activity overrides it to take
+         *  the step's photograph. */
+        default void onStepEnd(int step) { }
+
+        /** v3.12 (R4 — the ask action): put a clarifying question
+         *  to the user and wait for the typed (or spoken) answer.
+         *  Blocks the agent thread until the user answers, the
+         *  wait expires (timeoutMs, which the loop sets to the
+         *  active pack's approval timeout — an ask waits on the
+         *  same clock as an approval), or stop is requested.
+         *  Returns the answer text, or null when there is no
+         *  answer: a null is NEVER an answer — the loop stops
+         *  the run honestly rather than guess (the silence
+         *  discipline). A DEFAULT method, deliberately, for the
+         *  same reason as onStepEnd above: pre-v3.12
+         *  implementations stay complete without it, and their
+         *  default — silence — fails safe: an ask under them
+         *  stops the run with "no answer to my question"
+         *  instead of hanging or proceeding unanswered. */
+        default String askUser(String question, long timeoutMs) {
+            return null;
+        }
+    }
+
+    /** v3.13 (R5 — site grants): the loop's read seam onto the
+     *  user's remembered consequential approvals (SiteGrants).
+     *  The Activity owns the store and hands in a live view of
+     *  it, so a revocation in Settings takes effect at the NEXT
+     *  decision, and a grant remembered at one approval can
+     *  answer a later step of the same run. The loop consults
+     *  the book ONLY after the Governor has decided, and only
+     *  when the decision is ASK with classification
+     *  CONSEQUENTIAL — a grant can answer an ask; it can never
+     *  produce one, and the deny pass, the domain rules, the
+     *  readonly pack's denials and a STOP are all upstream of
+     *  or outside this seam, so a grant overrides none of them.
+     *  A null book (every pre-v3.13 constructor) means no
+     *  grants exist as far as the loop is concerned. */
+    public interface GrantBook {
+        /** The grant covering exactly this host and action
+         *  kind, or null. */
+        SiteGrants.Grant find(String host, String actionKind);
     }
 
     private final Hands hands;
@@ -288,6 +435,108 @@ public class Agent {
     private final boolean autoReadEnabled;
     private final int chunkPref;
 
+    // v3.6 (settings, second wave): four more values handed in
+    // the same way, each recorded on the run's opening "run"
+    // record beside "model" and "grammar_setting", so a trail
+    // names the configuration that produced it (the A/B evidence
+    // discipline). threadsSetting is the BRAIN thread choice —
+    // the record prefers the engine's loadedThreads() when a
+    // model is actually loaded (the count the context was
+    // created with), falling back to the setting for a replay,
+    // which loads nothing. fallbackEngineId names the search
+    // fallback the hands will use (the hands do the navigating;
+    // the record is the loop's). desktopModeOn and
+    // prefixCacheSettingOn are the settings as captured at
+    // Start; the per-decide "reused_tokens" figures remain the
+    // evidence of what the cache actually did. liveStatsOn only
+    // governs DISPLAY: the gen tallies below are kept either
+    // way, and surface (status line, summary line, run_summary
+    // fields) only when it is on — off, every line and record
+    // reads exactly as it did through v3.5.
+    private final int threadsSetting;
+    private final String fallbackEngineId;
+    private final boolean desktopModeOn;
+    private final boolean prefixCacheSettingOn;
+    private final boolean liveStatsOn;
+
+    // v3.7 (settings, third wave): two more values handed in
+    // the same way and recorded on the same opening records.
+    // stepShotsOn is a rule the loop obeys (it gates the
+    // Ui.onStepEnd calls below); endViewSetting is record-
+    // keeping only — the landing itself is the Activity's,
+    // read live at the finish like speak-on-finish (the trail
+    // names the value in force when the run started).
+    private final boolean stepShotsOn;
+    private final int endViewSetting;
+
+    // v3.8 (settings, fourth wave): two more values handed in
+    // the same way and recorded on the same opening records.
+    // Both are the ACTIVITY's to enforce (it owns the window
+    // flag and the Start-time dialog); the loop only records
+    // them, so a trail names whether the run began under the
+    // screen-awake hold and the battery guard. Record-keeping
+    // only, like endViewSetting — no loop decision reads them.
+    private final boolean screenAwakeSettingOn;
+    private final boolean batteryGuardSettingOn;
+
+    // v3.10 (R2 — planner styles): the style captured at Start
+    // (a Settings STYLE_* value, clamped at construction), like
+    // every run rule. It drives the prompt's posture line
+    // (postureTextFor), the two style guards the loop consults
+    // (Careful's verify-read, Thorough's cross-check) and —
+    // through effectiveChunkPref, applied to chunkPref at
+    // construction — Fast's chunk precedence. Recorded on the
+    // run record as "style".
+    private final int style;
+
+    // v3.12 (R4 — strategy retry): when this run IS a retry, the
+    // override it runs under and the trail it retries, handed in
+    // as plain values like every run rule. Both null for an
+    // ordinary run — and the run record carries the
+    // "retry_override" / "retry_of" stamps ONLY when they are
+    // non-null, so a non-retry trail reads exactly as it did
+    // through v3.11. The override itself is not applied here:
+    // the Activity folds it into the ordinary run-rule values
+    // (fallback engine, desktop mode, style) it already hands
+    // in, so the run's records name the values actually in
+    // force, and the user's saved settings are never touched.
+    private final String retryOverride;
+    private final String retryOf;
+
+    // v3.13 (R5 — resume interrupted runs): when this run IS a
+    // resume, the interrupted trail's name, handed in like the
+    // retry stamp. Null for an ordinary run — and the run
+    // record carries the "resumed_from" stamp ONLY when it is
+    // non-null, so a non-resume trail reads exactly as it did
+    // through v3.12. The resumed run's rules came from the dead
+    // run's marker, not from the saved settings (the Activity
+    // folds them into the ordinary construction values, as it
+    // does a retry's override), and the interrupted trail is
+    // never opened: its missing terminal event is its record.
+    private final String resumedFrom;
+
+    // v3.13 (R5 — site grants): the remembered-approvals seam
+    // (see GrantBook). Null means no grants — every pre-v3.13
+    // caller's behaviour, byte for byte.
+    private final GrantBook grantBook;
+
+    // v3.15 (R7 — multi-tab): whether this run may use tabs at
+    // all. Ordinary runs may (the standing behaviour — every
+    // pre-v3.15 constructor delegates with true). Watched and
+    // scheduled runs and route replays may NOT: they pin tab 1
+    // (the loop forces the browser onto its first tab at the
+    // start and the tab guard refuses planner tab actions all
+    // run), because a check or a replay must be the same simple
+    // shape every time it runs. Handed in as a plain value like
+    // every run rule; the Activity decides it at Start.
+    private final boolean tabsEnabled;
+
+    // v3.15 (R7): the running loop's tab book, set by run()
+    // before its first step so addHistory can stamp each entry
+    // with the tab it was produced in. Null outside run() (a
+    // replay keeps no history).
+    private TabBook tabBook;
+
     public volatile int currentStep = 0;
 
     // v2.5 (item 4 — run summary): the run's own tallies, reset at
@@ -299,6 +548,12 @@ public class Agent {
     private long runStartMs = 0;
     private long totalPromptTokens = 0;
     private long totalReusedTokens = 0;
+    // v3.6 (live stats): the generation side of the same tallies
+    // — tokens generated and the milliseconds they took, summed
+    // over every decide from the same Stats snapshots. Kept
+    // always; displayed only when the run's liveStatsOn is set.
+    private long totalGenTokens = 0;
+    private long totalGenMs = 0;
 
     // v2.9 (item 3 — adaptive read chunks): the chunk size the
     // hands serve for the CURRENT perception — the standing
@@ -313,6 +568,21 @@ public class Agent {
     // spent, judged against Copilot.MAX_ASSISTS at every stuck
     // stop. Reset at the top of run(), like the tallies above.
     private int assistsUsed = 0;
+
+    // v3.12 (R4 — the ask action): the asks this run has spent,
+    // judged against RelevanceGuard.ASK_CAP by the ask guard.
+    // Reset at the top of run(), like the tallies above. An ask
+    // is not an assist: the two budgets are independent and both
+    // may be spent in one run.
+    private int asksUsed = 0;
+
+    // v3.12 (R4): set by askHere when the question went
+    // unanswered; the loop reads it immediately after the
+    // execute dispatch and stops the run. Only an ask execution
+    // can set it (askHere is the dispatch's only setter), and
+    // askHere clears it on entry, so a stale flag can never
+    // stop a later step.
+    private boolean askStopPending = false;
 
     // v3.0 (item 1 — the fact scratchpad): this run's notebook.
     // Owned by the Agent instance (a fresh Agent is built per
@@ -340,16 +610,183 @@ public class Agent {
                 MAX_STEPS, true, true, Settings.CHUNK_AUTO);
     }
 
-    /** v3.4: the full constructor — the settings-threaded one
-     *  the Activity uses. The older constructors delegate with
-     *  the standing defaults (25 steps, co-pilot on, auto-read
-     *  on, adaptive chunks), so every pre-v3.4 call site and
-     *  harness scenario behaves exactly as before. */
+    /** v3.4: the settings-threaded constructor. The older
+     *  constructors delegate with the standing defaults (25
+     *  steps, co-pilot on, auto-read on, adaptive chunks), so
+     *  every pre-v3.4 call site and harness scenario behaves
+     *  exactly as before. Since v3.6 it delegates onward to the
+     *  fullest constructor with the v3.6 defaults (4 threads,
+     *  DuckDuckGo fallback, desktop off, prefix cache on, live
+     *  stats off) — again the standing behaviour. */
     public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
                  Trail trail, Ui ui, String modelId,
                  boolean grammarSettingOn, int maxSteps,
                  boolean copilotEnabled, boolean autoReadEnabled,
                  int chunkPref) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                ModelEngine.DEFAULT_THREADS, SearchEngines.DEFAULT_ID,
+                false, true, false);
+    }
+
+    /** v3.6: the second-wave constructor. Since v3.7 it
+     *  delegates onward with the third wave's defaults (step
+     *  screenshots off, end view Card) — again the standing
+     *  behaviour. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                false, Settings.END_CARD);
+    }
+
+    /** v3.7: the third-wave constructor. Since v3.8 it delegates
+     *  onward with the fourth wave's defaults (screen-awake off
+     *  — the standing behaviour; battery guard on — the new
+     *  setting's own product default, recorded as such). */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                stepShotsOn, endViewSetting, false, true);
+    }
+
+    /** v3.8: the fourth-wave constructor. Since v3.10 it
+     *  delegates onward with the Balanced style — the posture
+     *  every run through v3.9 used, so every existing caller
+     *  (and every host test) keeps v3.9 behaviour exactly. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting,
+                 boolean screenAwakeSettingOn,
+                 boolean batteryGuardSettingOn) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                stepShotsOn, endViewSetting, screenAwakeSettingOn,
+                batteryGuardSettingOn, Settings.STYLE_BALANCED);
+    }
+
+    /** v3.10: the style constructor. Since v3.12 it delegates
+     *  onward with no retry stamp — the standing behaviour for
+     *  every caller that is not starting a retry. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting,
+                 boolean screenAwakeSettingOn,
+                 boolean batteryGuardSettingOn,
+                 int plannerStyle) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                stepShotsOn, endViewSetting, screenAwakeSettingOn,
+                batteryGuardSettingOn, plannerStyle, null, null);
+    }
+
+    /** v3.12: the style + retry constructor. Since v3.13 it
+     *  delegates onward with no resume stamp and no grant
+     *  book — the standing behaviour for every caller that is
+     *  not resuming a run or carrying the user's site grants. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting,
+                 boolean screenAwakeSettingOn,
+                 boolean batteryGuardSettingOn,
+                 int plannerStyle, String retryOverride,
+                 String retryOf) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                stepShotsOn, endViewSetting, screenAwakeSettingOn,
+                batteryGuardSettingOn, plannerStyle, retryOverride,
+                retryOf, null, null);
+    }
+
+    /** v3.13: the fullest constructor of its day. Since
+     *  v3.15 it delegates onward with tabs ENABLED — the
+     *  standing behaviour for every caller that predates
+     *  multi-tab (an ordinary run may open tabs; only the
+     *  run kinds the Activity names pin tab 1). */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting,
+                 boolean screenAwakeSettingOn,
+                 boolean batteryGuardSettingOn,
+                 int plannerStyle, String retryOverride,
+                 String retryOf, String resumedFrom,
+                 GrantBook grantBook) {
+        this(hands, engine, pack, trail, ui, modelId, grammarSettingOn,
+                maxSteps, copilotEnabled, autoReadEnabled, chunkPref,
+                threadsSetting, fallbackEngineId, desktopModeOn,
+                prefixCacheSettingOn, liveStatsOn,
+                stepShotsOn, endViewSetting, screenAwakeSettingOn,
+                batteryGuardSettingOn, plannerStyle, retryOverride,
+                retryOf, resumedFrom, grantBook, true);
+    }
+
+    /** v3.15: the fullest constructor — the one the Activity
+     *  uses, threading the planner style in as a plain value
+     *  with the four waves of settings (see the field blocks
+     *  above), captured at Start for the whole run, plus the
+     *  R4 retry stamp, the R5 resume stamp, the R5 grant
+     *  book (each null for an ordinary run) and the R7 tabs
+     *  rule (tabsEnabled — false pins the run to tab 1:
+     *  watched, scheduled and replay runs). The style is
+     *  clamped here, and Fast's chunk precedence is applied
+     *  to chunkPref here (effectiveChunkPref), so the loop's
+     *  standing chunk machinery runs unchanged on the value
+     *  the run actually uses. */
+    public Agent(Hands hands, ModelEngine engine, PolicyPacks.Pack pack,
+                 Trail trail, Ui ui, String modelId,
+                 boolean grammarSettingOn, int maxSteps,
+                 boolean copilotEnabled, boolean autoReadEnabled,
+                 int chunkPref, int threadsSetting,
+                 String fallbackEngineId, boolean desktopModeOn,
+                 boolean prefixCacheSettingOn, boolean liveStatsOn,
+                 boolean stepShotsOn, int endViewSetting,
+                 boolean screenAwakeSettingOn,
+                 boolean batteryGuardSettingOn,
+                 int plannerStyle, String retryOverride,
+                 String retryOf, String resumedFrom,
+                 GrantBook grantBook, boolean tabsEnabled) {
         this.hands = hands;
         this.engine = engine;
         this.pack = pack;
@@ -362,7 +799,41 @@ public class Agent {
         this.maxSteps = (maxSteps > 0) ? maxSteps : MAX_STEPS;
         this.copilotEnabled = copilotEnabled;
         this.autoReadEnabled = autoReadEnabled;
-        this.chunkPref = chunkPref;
+        this.style = Settings.clampPlannerStyle(plannerStyle);
+        // v3.10: Fast's chunk precedence, applied once here —
+        // the loop reads chunkPref exactly as before and gets
+        // the value the run actually uses.
+        this.chunkPref = effectiveChunkPref(chunkPref, this.style);
+        this.threadsSetting = ModelEngine.clampThreads(threadsSetting);
+        this.fallbackEngineId = SearchEngines.resolveId(fallbackEngineId);
+        this.desktopModeOn = desktopModeOn;
+        this.prefixCacheSettingOn = prefixCacheSettingOn;
+        this.liveStatsOn = liveStatsOn;
+        this.stepShotsOn = stepShotsOn;
+        this.endViewSetting = clampEndView(endViewSetting);
+        this.screenAwakeSettingOn = screenAwakeSettingOn;
+        this.batteryGuardSettingOn = batteryGuardSettingOn;
+        this.retryOverride = retryOverride;
+        this.retryOf = retryOf;
+        this.resumedFrom = resumedFrom;
+        this.grantBook = grantBook;
+        this.tabsEnabled = tabsEnabled;
+    }
+
+    /** v3.7: an end-of-run view the model can name, or Card —
+     *  the record never carries a value the UI cannot land on. */
+    private static int clampEndView(int v) {
+        return (v == Settings.END_STEPS || v == Settings.END_TRAIL
+                || v == Settings.END_CARD) ? v : Settings.END_CARD;
+    }
+
+    /** v3.6: the thread count the run record cites — the loaded
+     *  context's own count when the engine holds one (what the
+     *  run actually computed with), else the setting captured at
+     *  Start (a route replay loads nothing). */
+    private long runThreads() {
+        int loaded = (engine == null) ? 0 : engine.loadedThreads();
+        return (loaded > 0) ? loaded : threadsSetting;
     }
 
     public Trail trail() {
@@ -375,17 +846,51 @@ public class Agent {
         runStartMs = System.currentTimeMillis();
         totalPromptTokens = 0;
         totalReusedTokens = 0;
+        totalGenTokens = 0;
+        totalGenMs = 0;
         assistsUsed = 0;
+        asksUsed = 0;
+        askStopPending = false;
         // v3.0: the run's opening record — the trail is self-
         // describing from its first line (the answer card reads
         // the goal from here; pre-v3.0 trails have no such event
         // and the card falls back to a caller-supplied goal).
-        trail.record("run", 0, Trail.fields(
+        // v3.6: the record also names the run's configuration —
+        // threads, fallback engine, desktop mode, prefix cache —
+        // beside "model" and "grammar_setting", so a trail is
+        // complete A/B evidence for the settings in force.
+        Map<String, Object> runFields = Trail.fields(
                 "goal", goal,
                 "pack", pack.name,
                 "model", modelId,
                 "grammar_setting", Boolean.valueOf(grammarSettingOn),
-                "max_steps", Long.valueOf(maxSteps)));
+                "max_steps", Long.valueOf(maxSteps),
+                "threads", Long.valueOf(runThreads()),
+                "fallback_engine", fallbackEngineId,
+                "desktop_mode", Boolean.valueOf(desktopModeOn),
+                "prefix_cache", Boolean.valueOf(prefixCacheSettingOn),
+                "end_view", Settings.endViewName(endViewSetting),
+                "step_shots", Boolean.valueOf(stepShotsOn),
+                "screen_awake", Boolean.valueOf(screenAwakeSettingOn),
+                "battery_guard", Boolean.valueOf(
+                        batteryGuardSettingOn),
+                "style", Settings.styleName(style));
+        // v3.12 (R4): the retry stamps ride ONLY on a retry's
+        // record — an ordinary run's opening record is
+        // byte-identical to v3.11's.
+        if (retryOverride != null) {
+            runFields.put("retry_override", retryOverride);
+        }
+        if (retryOf != null) {
+            runFields.put("retry_of", retryOf);
+        }
+        // v3.13 (R5): the resume stamp rides ONLY on a resumed
+        // run's record — an ordinary run's opening record is
+        // byte-identical to v3.12's.
+        if (resumedFrom != null) {
+            runFields.put("resumed_from", resumedFrom);
+        }
+        trail.record("run", 0, runFields);
         List<String> history = new ArrayList<String>();
         // v1.8: parallel to history — for a history entry that is a
         // read result, the URL of the page that was read (null for
@@ -395,44 +900,70 @@ public class Agent {
         // only ever mutated through addHistory / trimHistory below,
         // which keep them the same length.
         List<String> historyReadUrls = new ArrayList<String>();
+        // v3.15 (R7): a third parallel list — the 0-based index
+        // of the tab each history entry was produced in. The
+        // done-grounding guard judges a done against the ACTIVE
+        // tab's entries only (plus the scratchpad, the sanctioned
+        // cross-tab channel): a fact read in one tab does not
+        // ground an answer given from another. addHistory /
+        // trimHistory keep all three lists the same length.
+        List<Integer> historyTabs = new ArrayList<Integer>();
+        // v3.15 (R7): the run's tab book (see TabState / TabBook
+        // below), synced from the hands before the first step:
+        // the browser may already hold tabs the user opened by
+        // hand. A run kind that pins tab 1 (tabsEnabled false —
+        // watched, scheduled and replay runs) first puts the
+        // browser back on its first tab, and its planner tab
+        // actions are refused by the tab guard all run.
+        TabBook book = new TabBook();
+        this.tabBook = book;
+        int handTabs = 1;
+        int handActive = 0;
+        try {
+            handTabs = Math.max(1, hands.tabCount());
+            handActive = hands.activeTabIndex();
+        } catch (Exception ignored) {
+            // Hands that cannot report tabs are single-tab by
+            // definition (the interface defaults say so).
+        }
+        if (!tabsEnabled && handActive != 0) {
+            try {
+                hands.switchTab(0);
+                handActive = 0;
+            } catch (Exception ignored) { }
+        }
+        for (int i = 0; i < handTabs; i++) {
+            book.states.add(new TabState());
+            String u = null;
+            try { u = hands.tabUrl(i); } catch (Exception ignored) { }
+            book.urls.add(u);
+        }
+        book.active = (handActive >= 0 && handActive < handTabs)
+                ? handActive : 0;
         Map<String, Integer> seenActions = new LinkedHashMap<String, Integer>();
         Map<String, Integer> guardCounts = new LinkedHashMap<String, Integer>();
-        String lastSignature = null;
         int unchanged = 0;
         int unparseable = 0;
         boolean searched = false;
-        // v1.2 repeat-search correction state: the last executed
-        // search query, and whether the agent is still sitting on
-        // that query's results page (no navigating action since).
-        String lastSearchQuery = null;
-        boolean onSearchResults = false;
-        // v1.3 hardened repeat-search state: keyed purely on the
-        // execution history — the last successfully EXECUTED search
-        // query, and whether a tap/goto/read/type has executed
-        // since. No perception is consulted, so a perception that
-        // races a navigation cannot disarm it (v1.2 field miss).
-        String lastExecutedSearchQuery = null;
-        boolean navigatedSinceSearch = false;
-        // v1.3 auto-read state: URLs already auto-read this run,
-        // and the labelled section for the page currently open (the
-        // extraction happens once per URL; the section is re-shown
-        // in the prompt while the agent stays on that URL).
-        Set<String> autoReadUrls = new LinkedHashSet<String>();
-        String autoReadUrl = null;
-        String autoReadSection = null;
+        // v3.15 (R7): the per-tab loop state that used to be
+        // declared here — the repeat-search pair (v1.2/v1.3),
+        // the auto-read triple (v1.3), the detour pair (v2.5),
+        // the delta cursor and style-guard page state (v3.10),
+        // the read-completion totals (v1.9) and the stuck
+        // signature — now lives in the active TabState (ts,
+        // from the tab book above): each tab keeps its own,
+        // and switching tabs neither leaks nor loses any of
+        // it. Run-global state stays declared here as before.
         // v1.3 chrome-tab correction state: tab labels already
         // corrected this run (each label is corrected at most once).
         Set<String> chromeCorrected = new LinkedHashSet<String>();
         // v1.6 error-page recovery state: failed URLs that have
         // already had their one auto-reload this run.
         Set<String> recoveredUrls = new LinkedHashSet<String>();
-        // v2.5 dead-result detour state: the URL of the most recent
-        // search-results page the agent departed by tapping one of
-        // its links, whether the current page was arrived at by such
-        // a tap (set/cleared in the post-execute bookkeeping below),
-        // and how many detours this run has spent (DETOUR_CAP).
-        String lastResultsUrl = null;
-        boolean arrivedViaResultsLink = false;
+        // v2.5: how many dead-result detours this run has spent
+        // (DETOUR_CAP) — run-global; the detour's page state
+        // (ts.lastResultsUrl / ts.arrivedViaResultsLink) is per-tab
+        // since v3.15 and lives in the TabState.
         int detoursUsed = 0;
         // v1.6 empty-map correction count (the cap itself lives in
         // RelevanceGuard.EMPTY_MAP_CORRECTION_CAP).
@@ -443,6 +974,13 @@ public class Agent {
         // v2.1 done-grounding correction count (the cap itself
         // lives in RelevanceGuard.DONE_CORRECTION_CAP).
         int doneCorrections = 0;
+        // v3.10 (R2): the style guards' correction counts (their
+        // caps live in RelevanceGuard) — run-global; the guards'
+        // page state itself (ts.navUrl / ts.navPageRead / ts.readPageUrls)
+        // and the perception-delta cursor are per-tab since
+        // v3.15 and live in the TabState.
+        int verifyCorrections = 0;
+        int crossCorrections = 0;
         // v3.1 repeat-action guard state: the semantic keys of
         // the actions this run has SUCCESSFULLY executed (the
         // ledger RelevanceGuard.repeatActionReason judges
@@ -468,8 +1006,6 @@ public class Agent {
         // step-7 re-read wrapped the cursor uncorrected. One map,
         // fed by both paths; a shared correction counter caps the
         // rule per run (RelevanceGuard.READ_COMPLETE_CORRECTION_CAP).
-        Map<String, Integer> readCompleteTotals =
-                new LinkedHashMap<String, Integer>();
         int readCompleteCorrections = 0;
         // v1.2: reads legitimately leave the element map unchanged;
         // the stuck checks must not count a read as stagnation.
@@ -479,6 +1015,10 @@ public class Agent {
         steps:
         for (int step = 1; step <= maxSteps; step++) {
             currentStep = step;
+            // v3.15 (R7): this step's per-tab state — the active
+            // tab's own bundle. A tab action rebinds it after the
+            // execute dispatch (see below); nothing else moves it.
+            TabState ts = book.cur();
             if (ui.stopRequested()) {
                 stop(step, "stopped", "user pressed Stop");
                 return;
@@ -583,8 +1123,8 @@ public class Agent {
                         stop(step, "stopped", "user pressed Stop");
                         return;
                     }
-                } else if (shouldDetour(failedKey, lastResultsUrl,
-                        detoursUsed, arrivedViaResultsLink)) {
+                } else if (shouldDetour(failedKey, ts.lastResultsUrl,
+                        detoursUsed, ts.arrivedViaResultsLink)) {
                     // -- dead-result detour (v2.5) ------------------
                     // Field evidence (trail-20261024-234232): the
                     // planner tapped a forecast result out of the
@@ -606,17 +1146,17 @@ public class Agent {
                     detoursUsed++;
                     trail.record("detour", step, Trail.fields(
                             "failed_url", failedKey,
-                            "results_url", lastResultsUrl,
+                            "results_url", ts.lastResultsUrl,
                             "detours_used", Long.valueOf(detoursUsed)));
                     ui.feed("Step " + step + ": result failed to load; "
                             + "back to results to pick another: "
                             + failedKey);
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": the result you opened ("
                             + failedKey + ") failed to load, so you "
                             + "went back. Do not tap that result again; "
                             + "pick a different one.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     boolean backOk = true;
                     try {
                         hands.back();
@@ -649,7 +1189,7 @@ public class Agent {
                         // Wherever Back landed, the agent is no
                         // longer "arrived via a results link" — the
                         // next departure re-arms the detour state.
-                        arrivedViaResultsLink = false;
+                        ts.arrivedViaResultsLink = false;
                         if (ui.stopRequested()) {
                             stop(step, "stopped", "user pressed Stop");
                             return;
@@ -701,7 +1241,7 @@ public class Agent {
             // the read action, the completion state and every
             // guard are untouched; only this convenience goes.
             if (autoReadEnabled && RelevanceGuard.shouldAutoRead(goal, perception.title,
-                    perception.url, autoReadUrls)) {
+                    perception.url, ts.autoReadUrls)) {
                 // v2.2: redundant auto-read suppression. This page
                 // was ALREADY read to the end this run (the planner
                 // paged through it; the completion state is fed by
@@ -714,21 +1254,21 @@ public class Agent {
                 // the duplicated section pushed the step-5 prompt
                 // over the 2048 context. Skip the extraction and the
                 // section entirely; arrival still arms (the arrival
-                // guard keys on autoReadUrl) and the completion
+                // guard keys on ts.autoReadUrl) and the completion
                 // banner still applies (decide computes it from
-                // readCompleteTotals).
-                if (readCompleteTotals.containsKey(perception.url)) {
-                    autoReadUrls.add(perception.url);
-                    autoReadUrl = perception.url;
-                    autoReadSection = null;
+                // ts.readCompleteTotals).
+                if (ts.readCompleteTotals.containsKey(perception.url)) {
+                    ts.autoReadUrls.add(perception.url);
+                    ts.autoReadUrl = perception.url;
+                    ts.autoReadSection = null;
                 } else {
                     try {
                         String autoResult = hands.read(currentReadChunkChars);
                         if (autoResult != null
                                 && !autoResult.startsWith("error")) {
-                            autoReadUrls.add(perception.url);
-                            autoReadUrl = perception.url;
-                            autoReadSection = autoReadSection(autoResult);
+                            ts.autoReadUrls.add(perception.url);
+                            ts.autoReadUrl = perception.url;
+                            ts.autoReadSection = autoReadSection(autoResult);
                             // v1.9: did this extraction reach the end
                             // of the page text? Feed the shared
                             // completion map (a planner read on a
@@ -737,7 +1277,7 @@ public class Agent {
                             if (readReachedEnd(autoResult)) {
                                 int total = readTotalChars(autoResult);
                                 if (total > 0) {
-                                    readCompleteTotals.put(perception.url,
+                                    ts.readCompleteTotals.put(perception.url,
                                             Integer.valueOf(total));
                                 }
                             }
@@ -762,13 +1302,34 @@ public class Agent {
             // v3.0: `note` is exempt for the same reason — noting a
             // fact is bookkeeping progress on a page that does not
             // move, not stagnation.
+            // v3.9 (R1): the form fills — type, choose, toggle —
+            // are exempt for the same reason again, and for type by
+            // necessity: a filled text field IS progress, and the
+            // map cannot show it (typed text deliberately never
+            // rides the perception payload). Without the exemption
+            // a form with four text fields stopped "stuck" after
+            // the third fill — the forms pack's headline case,
+            // caught by its own harness scenario. A fill loop is
+            // still bounded: the repeat ledger corrects identical
+            // re-fills, and the step cap ends anything else.
+            // v3.12 (R4): `ask` is exempt for the same reason
+            // again — asking the user a question is progress that
+            // cannot move the map (the page is never touched).
+            // v3.16 (R8): `read_file` is exempt for read's own
+            // reason — it walks a document's chunks, and the
+            // page's map does not move while it does.
             String sig = perception.signature();
-            if (sig.equals(lastSignature) && !"read".equals(lastExecutedKind)
-                    && !"note".equals(lastExecutedKind)) {
+            if (sig.equals(ts.lastSignature) && !"read".equals(lastExecutedKind)
+                    && !"note".equals(lastExecutedKind)
+                    && !"type".equals(lastExecutedKind)
+                    && !"choose".equals(lastExecutedKind)
+                    && !"toggle".equals(lastExecutedKind)
+                    && !"ask".equals(lastExecutedKind)
+                    && !"read_file".equals(lastExecutedKind)) {
                 unchanged++;
             } else {
                 unchanged = 0;
-                lastSignature = sig;
+                ts.lastSignature = sig;
             }
             if (unchanged >= 3) {
                 // v3.3 (item 4 — co-pilot tap): before the stuck
@@ -779,7 +1340,7 @@ public class Agent {
                 // fresh, with the stagnation counters reset.
                 if (offerAssist(step,
                         "element map unchanged for 3 consecutive steps",
-                        history, historyReadUrls)) {
+                        history, historyReadUrls, historyTabs)) {
                     try {
                         perception = hands.perceive();
                     } catch (Exception e) {
@@ -799,7 +1360,7 @@ public class Agent {
                             Long.valueOf(rendered.length()),
                             "signature", perception.signature()));
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     lastExecutedKind = null;
                 } else {
                     stop(step, "stuck",
@@ -832,11 +1393,11 @@ public class Agent {
                 // on the URL it was extracted from, and only when that
                 // page has not already been read to the end this run
                 // (autoReadSectionFor, v2.2).
-                String currentAutoRead = autoReadSectionFor(autoReadSection,
-                        autoReadUrl, perception.url, readCompleteTotals);
+                String currentAutoRead = autoReadSectionFor(ts.autoReadSection,
+                        ts.autoReadUrl, perception.url, ts.readCompleteTotals);
                 // v1.9: the completion banner joins it when THIS page's
                 // text has been read to the end (by either read path).
-                Integer completeBoxed = readCompleteTotals.get(perception.url);
+                Integer completeBoxed = ts.readCompleteTotals.get(perception.url);
                 int completeTotal = (completeBoxed == null)
                         ? 0 : completeBoxed.intValue();
                 // v2.9 (item 1 — the fit guarantee): the prompt is
@@ -856,12 +1417,68 @@ public class Agent {
                 // v2.9's. The fit ladder may stub it only at its
                 // last rung; FitResult says when it did.
                 String factsBlock = scratchpad.render();
-                FitResult fit = fitPrompt(goal, perception, rendered,
+                // v3.10 (R2): the style guards' page tracking —
+                // a URL change means the current page has not
+                // been read since arriving (unless it was read
+                // to completion earlier this run, which the
+                // read-after-complete guard already treats as
+                // read); an auto-read section in this prompt
+                // means it has been read.
+                if (ts.navUrl == null || !ts.navUrl.equals(perception.url)) {
+                    ts.navUrl = perception.url;
+                    ts.navPageRead = ts.readCompleteTotals.containsKey(
+                            perception.url);
+                }
+                if (currentAutoRead != null) {
+                    ts.navPageRead = true;
+                    ts.readPageUrls.add(perception.url);
+                }
+                // v3.10 (R2 — perception deltas): the block this
+                // step's prompt carries in the map slot. The
+                // perception itself stays full-fidelity (the
+                // stash, the heal, the ladder and the guards all
+                // see it whole); only the prompt's copy is
+                // chosen, by MapDelta. The style's posture line
+                // rides the same assembly (null under Balanced).
+                MapDelta.Block mapBlock = MapDelta.choose(ts.deltaState,
+                        perception, goal, rendered);
+                // v3.15 (R7): the tab roster — one line naming
+                // every open tab (number + host, the active one
+                // marked), so the planner can reason about
+                // switching. The active tab's url is refreshed
+                // from this perception first (it is the only
+                // entry that can drift between tab actions: the
+                // active tab navigates). Null with fewer than
+                // two tabs open, so a single-tab run's prompt is
+                // byte-identical to v3.14's.
+                book.urls.set(book.active, perception.url);
+                String tabsText = tabsRosterText(book.urls,
+                        book.active);
+                // v3.16 (R8): the Files line — the readable
+                // documents in the store, named for read_file.
+                // Null when the store holds none, so a run
+                // without documents prompts byte-identically
+                // to v3.15's.
+                String docsText = docsRosterText(
+                        hands.documentNames());
+                FitResult fit = fitPrompt(goal, perception,
+                        mapBlock.text,
                         history, historyReadUrls, currentAutoRead,
                         completeTotal,
                         factsBlock.length() > 0 ? factsBlock : null,
                         factsBlock.length() > 0
-                                ? scratchpad.renderStubbed() : null);
+                                ? scratchpad.renderStubbed() : null,
+                        postureTextFor(style), tabsText, docsText);
+                // The ladder's rung 3+ replaced the block with
+                // its own full rendering of the map: what the
+                // planner actually saw is a full map, so the
+                // delta cursor restarts from a fresh baseline
+                // and this step records as a full block.
+                String blockKind = mapBlock.kind;
+                if (fit.rungs >= 3) {
+                    ts.deltaState.reset();
+                    blockKind = MapDelta.FULL;
+                }
                 if (!fit.fits) {
                     stop(step, "budget", densePageSummary(fit.estTokens));
                     return;
@@ -890,6 +1507,21 @@ public class Agent {
                 // really did spend the tokens again).
                 totalPromptTokens += stats.lastPromptTokens;
                 totalReusedTokens += stats.lastReusedTokens;
+                // v3.6: the generation tallies ride the same
+                // snapshots (kept always; shown only under the
+                // live-stats setting — see stop()).
+                totalGenTokens += stats.lastGenTokens;
+                totalGenMs += stats.lastGenMs;
+                // v3.6 (live stats): the status area carries the
+                // run's live speed and cache reuse, refreshed at
+                // every decide that actually evaluated a prompt.
+                // An engine error's zero snapshot skips this —
+                // stop() is about to own the status line.
+                if (liveStatsOn && stats.lastPromptTokens > 0) {
+                    ui.status(liveStatusText(step, totalGenTokens,
+                            totalGenMs, totalPromptTokens,
+                            totalReusedTokens));
+                }
                 // v1.8: an engine failure is NOT planner output. Through
                 // v1.7 an "ERROR: ..." string fell into the unparseable
                 // path below and the run burned three steps failing
@@ -905,7 +1537,9 @@ public class Agent {
                             "prompt_ms", Long.valueOf(stats.lastPromptMs),
                             "grammar", Boolean.valueOf(stats.lastGrammarConstrained),
                             "model", modelId,
-                            "grammar_setting", Boolean.valueOf(grammarSettingOn)));
+                            "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                            "map_block", blockKind,
+                            "tab", Long.valueOf(book.active + 1)));
                     stop(step, "error", engineErrorSummary(raw));
                     return;
                 }
@@ -920,7 +1554,9 @@ public class Agent {
                             "prompt_ms", Long.valueOf(stats.lastPromptMs),
                             "grammar", Boolean.valueOf(stats.lastGrammarConstrained),
                             "model", modelId,
-                            "grammar_setting", Boolean.valueOf(grammarSettingOn)));
+                            "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                            "map_block", blockKind,
+                            "tab", Long.valueOf(book.active + 1)));
                     trail.record("govern", step, Trail.fields(
                             "classification", "unknown",
                             "outcome", Governor.DENY,
@@ -929,10 +1565,10 @@ public class Agent {
                             + "action — denied, nothing ran."
                             + modelStatsLine(stats));
                     unparseable++;
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": (invalid output) -> denied; "
                             + "reply with exactly one JSON action object", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     if (unparseable >= 3) {
                         stop(step, "error", "planner produced unparseable output 3 times");
                         return;
@@ -948,7 +1584,9 @@ public class Agent {
                         "prompt_ms", Long.valueOf(stats.lastPromptMs),
                         "grammar", Boolean.valueOf(stats.lastGrammarConstrained),
                         "model", modelId,
-                        "grammar_setting", Boolean.valueOf(grammarSettingOn)));
+                        "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                        "map_block", blockKind,
+                            "tab", Long.valueOf(book.active + 1)));
 
                 // -- done-grounding guard (v2.1: agent-loop correction,
                 //    capped per run) — field evidence (trail-20261024-
@@ -974,9 +1612,51 @@ public class Agent {
                 // noted still grounds its done; a number that
                 // appears nowhere in the evidence is corrected
                 // like a numberless restatement was in v2.1.
+                // -- verify-read guard (v3.10, the Careful style's
+                //    real guard change): a done proposed on a page
+                //    that has not been read since the last
+                //    navigation is corrected once — Careful
+                //    finishes from text it took in, not from a map
+                //    alone. Consulted before the grounding guard
+                //    (a done on an unread page has no evidence to
+                //    ground in yet) and only under Careful; the
+                //    cap is RelevanceGuard's.
+                if (style == Settings.STYLE_CAREFUL) {
+                    String verifyReason =
+                            RelevanceGuard.doneVerifyReadReason(action,
+                                    ts.navPageRead, verifyCorrections);
+                    if (verifyReason != null) {
+                        verifyCorrections++;
+                        trail.record("guard", step, Trail.fields(
+                                "action", action.toMap(),
+                                "outcome", "correct",
+                                "reason", verifyReason));
+                        ui.feed("Step " + step + ": guard corrected "
+                                + action.describe(null)
+                                + "  [page not read yet -> not executed]");
+                        addHistory(history, historyReadUrls, historyTabs,
+                                "step " + step + ": " + action.toJson()
+                                + " -> corrected by guard: verify: read "
+                                + "the current page before finishing, "
+                                + "then answer done from its text.",
+                                null);
+                        trimHistory(history, historyReadUrls, historyTabs);
+                        // A correction is not stagnation.
+                        unchanged = 0;
+                        ts.lastSignature = null;
+                        continue steps;
+                    }
+                }
+                // v3.15 (R7): the evidence is the ACTIVE tab's —
+                // history entries the active tab produced, its
+                // auto-read section, and the scratchpad (the one
+                // sanctioned cross-tab channel). A fact read in
+                // another tab does not ground this done; it must
+                // be noted there and read from the notes here.
                 String doneReason = RelevanceGuard.doneGroundingReason(
                         action, goal, doneCorrections,
-                        groundingEvidence(history, currentAutoRead,
+                        groundingEvidence(history, historyTabs,
+                                book.active, currentAutoRead,
                                 scratchpad));
                 if (doneReason != null) {
                     doneCorrections++;
@@ -987,7 +1667,7 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(null)
                             + "  [summary states no values -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: your summary gives "
                             + "none of the values the goal asks for. Open "
@@ -995,11 +1675,44 @@ public class Agent {
                             + "values, then answer done with the numbers, "
                             + "or say plainly that you could not find them.",
                             null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
+                }
+
+                // -- cross-check guard (v3.10, the Thorough style):
+                //    the grounding guard has passed this done; for
+                //    a comparison-shaped goal its numbers must
+                //    also come from reads on at least two distinct
+                //    pages. Consulted only under Thorough; the cap
+                //    is RelevanceGuard's.
+                if (style == Settings.STYLE_THOROUGH) {
+                    String crossReason = RelevanceGuard.crossCheckReason(
+                            action, goal, crossCorrections,
+                            ts.readPageUrls.size());
+                    if (crossReason != null) {
+                        crossCorrections++;
+                        trail.record("guard", step, Trail.fields(
+                                "action", action.toMap(),
+                                "outcome", "correct",
+                                "reason", crossReason));
+                        ui.feed("Step " + step + ": guard corrected "
+                                + action.describe(null)
+                                + "  [one source only -> not executed]");
+                        addHistory(history, historyReadUrls, historyTabs,
+                                "step " + step + ": " + action.toJson()
+                                + " -> corrected by guard: cross-check: "
+                                + "this goal compares, so read a second "
+                                + "source and ground both sides before "
+                                + "answering done.", null);
+                        trimHistory(history, historyReadUrls, historyTabs);
+                        // A correction is not stagnation.
+                        unchanged = 0;
+                        ts.lastSignature = null;
+                        continue steps;
+                    }
                 }
 
                 if ("done".equals(action.action)) {
@@ -1013,9 +1726,9 @@ public class Agent {
                     String stuckWhy = action.reason == null
                             ? "planner reported stuck" : action.reason;
                     if (offerAssist(step, stuckWhy, history,
-                            historyReadUrls)) {
+                            historyReadUrls, historyTabs)) {
                         unchanged = 0;
-                        lastSignature = null;
+                        ts.lastSignature = null;
                         continue steps;
                     }
                     stop(step, "stuck", stuckWhy);
@@ -1027,18 +1740,18 @@ public class Agent {
                 //    counter below — a correction costs no stuck credit)
                 String signature = action.signature();
                 String repeatReason = RelevanceGuard.searchRepeatReason(
-                        action, lastSearchQuery, onSearchResults);
-                String repeatQuery = lastSearchQuery;
+                        action, ts.lastSearchQuery, ts.onSearchResults);
+                String repeatQuery = ts.lastSearchQuery;
                 if (repeatReason == null) {
                     // v1.3: the history-based condition — the previous
                     // EXECUTED action was this same search and nothing
                     // that moves or reads has executed since. Either
                     // condition firing corrects the repeat.
                     repeatReason = RelevanceGuard.searchRepeatByHistoryReason(
-                            action, lastExecutedSearchQuery,
-                            navigatedSinceSearch);
+                            action, ts.lastExecutedSearchQuery,
+                            ts.navigatedSinceSearch);
                     if (repeatReason != null) {
-                        repeatQuery = lastExecutedSearchQuery;
+                        repeatQuery = ts.lastExecutedSearchQuery;
                     }
                 }
                 if (repeatReason == null) {
@@ -1064,7 +1777,7 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(null)
                             + "  [repeat search -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: you already searched "
                             + "for \"" + repeatQuery + "\" and have not "
@@ -1072,11 +1785,11 @@ public class Agent {
                             + "matches the goal, or use {\"action\":\"read\"} "
                             + "to read this page. Do not search the same "
                             + "query again.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation: the next perception
                     // of the same page must not count toward stuck.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1130,14 +1843,14 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(element)
                             + "  [already done this run -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: "
                             + repeatActionReason, null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1155,10 +1868,13 @@ public class Agent {
                 // exempt for the same bookkeeping reason — the
                 // scratchpad dedupes a repeated fact itself, and
                 // writing several facts down in a row is progress,
-                // not a loop.
+                // not a loop. v3.16 (R8): `read_file` is exempt
+                // for read's reason exactly — consecutive reads
+                // of one document return its successive chunks.
                 String countedKey = null;
                 if (!"read".equals(action.action)
-                        && !"note".equals(action.action)) {
+                        && !"note".equals(action.action)
+                        && !"read_file".equals(action.action)) {
                     String repeatKey = repeatKey(perception.url, action, element);
                     countedKey = repeatKey;
                     Integer seen = seenActions.get(repeatKey);
@@ -1173,10 +1889,10 @@ public class Agent {
                         String stuckWhy = "action repeated 3 times: "
                                 + action.toJson();
                         if (offerAssist(step, stuckWhy, history,
-                                historyReadUrls)) {
+                                historyReadUrls, historyTabs)) {
                             seenActions.remove(repeatKey);
                             unchanged = 0;
-                            lastSignature = null;
+                            ts.lastSignature = null;
                             continue steps;
                         }
                         stop(step, "stuck", stuckWhy);
@@ -1203,17 +1919,17 @@ public class Agent {
                         ui.feed("Step " + step + ": guard corrected "
                                 + action.describe(element)
                                 + "  [off-goal -> not executed]");
-                        addHistory(history, historyReadUrls,
+                        addHistory(history, historyReadUrls, historyTabs,
                                 "step " + step + ": " + action.toJson()
                                 + " -> blocked by relevance guard (off-goal). "
                                 + "The goal asks to search: reply with "
                                 + "{\"action\":\"search\",\"query\":\"...\"} "
                                 + "using the goal's target terms.", null);
-                        trimHistory(history, historyReadUrls);
+                        trimHistory(history, historyReadUrls, historyTabs);
                         // A correction is not stagnation (see v1.2 repeat
                         // search): reset the unchanged-map counter.
                         unchanged = 0;
-                        lastSignature = null;
+                        ts.lastSignature = null;
                         continue steps;
                     }
                     // Cap reached for this action: fall through and let the
@@ -1239,16 +1955,16 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(element)
                             + "  [page tab -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: \"" + element.name
                             + "\" is a page tab - it does not change the "
                             + "page. You are already on the article; use "
                             + "{\"action\":\"read\"} to read it.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1289,17 +2005,17 @@ public class Agent {
                             + action.describe(element)
                             + "  [paging away from a matching result"
                             + " -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: " + paginationReason
                             + " Tap {\"action\":\"tap\",\"element\":"
                             + (match == null ? "?" : String.valueOf(match.number))
                             + "} (\"" + (match == null ? "" : match.name)
                             + "\") instead.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1324,7 +2040,7 @@ public class Agent {
                 // corrections the guard falls silent and the planner's
                 // proposals execute — no permanent trap.
                 String arrivalReason = RelevanceGuard.arrivalLeaveReason(
-                        action, element, perception.url, autoReadUrl,
+                        action, element, perception.url, ts.autoReadUrl,
                         arrivalCorrections);
                 if (arrivalReason != null) {
                     arrivalCorrections++;
@@ -1337,17 +2053,17 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(element)
                             + "  [leaving arrived page -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by arrival guard: you are on "
                             + "the target page and its opening text was "
                             + "auto-read above. Do not leave it: answer "
                             + "{\"action\":\"done\"} from that text, or "
                             + "use {\"action\":\"read\"} for more.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1364,13 +2080,13 @@ public class Agent {
                 //    field run did it at step 7 after its own reads
                 //    paged 2,400 -> 11,604 — v1.8's rule, keyed on the
                 //    auto-read alone, never saw that completion. The
-                //    unified state (readCompleteTotals, fed at both
+                //    unified state (ts.readCompleteTotals, fed at both
                 //    read executions) sees both. Correct the read:
                 //    answer done from the text already read. Capped
                 //    per run; reads on other pages and reads before
                 //    completion are never touched.
                 Integer doneTotalBoxed =
-                        readCompleteTotals.get(perception.url);
+                        ts.readCompleteTotals.get(perception.url);
                 String readCompleteReason = (doneTotalBoxed == null)
                         ? null
                         : RelevanceGuard.readAfterCompleteReason(action,
@@ -1388,7 +2104,7 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(element)
                             + "  [page already fully read -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: you have read this "
                             + "entire page (chars 0-" + doneTotalBoxed
@@ -1396,10 +2112,10 @@ public class Agent {
                             + "only repeats it from the top. Answer "
                             + "{\"action\":\"done\"} from the text you "
                             + "have read.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
@@ -1424,26 +2140,113 @@ public class Agent {
                     ui.feed("Step " + step + ": guard corrected "
                             + action.describe(element)
                             + "  [empty map -> not executed]");
-                    addHistory(history, historyReadUrls,
+                    addHistory(history, historyReadUrls, historyTabs,
                             "step " + step + ": " + action.toJson()
                             + " -> corrected by guard: this page shows no "
                             + "interactive elements (it may have failed to "
                             + "load or still be loading). Use goto, back, "
                             + "wait, or read instead of tap/type.", null);
-                    trimHistory(history, historyReadUrls);
+                    trimHistory(history, historyReadUrls, historyTabs);
                     // A correction is not stagnation.
                     unchanged = 0;
-                    lastSignature = null;
+                    ts.lastSignature = null;
+                    continue steps;
+                }
+
+                // -- ask guard (v3.12, R4: agent-loop, permanent) --
+                // Asking is capped per run and may not repeat back
+                // to back: ASK_CAP questions a run, and never two
+                // in a row with no intervening page action (an
+                // interrogation loop helps nobody). The judgement
+                // is the pure RelevanceGuard.askCorrectionReason;
+                // the correction is the family shape — the ask
+                // does not execute, spends no ask budget, and is
+                // not stagnation. Unlike the capped guards above,
+                // this one never falls silent: after the budget is
+                // spent every further ask corrects, and the run's
+                // step budget is the backstop.
+                String askReason = RelevanceGuard.askCorrectionReason(
+                        action, asksUsed, lastExecutedKind);
+                if (askReason != null) {
+                    trail.record("guard", step, Trail.fields(
+                            "action", action.toMap(),
+                            "outcome", "correct",
+                            "reason", askReason));
+                    ui.feed("Step " + step + ": guard corrected "
+                            + action.describe(null)
+                            + "  [ask limit -> not executed]");
+                    addHistory(history, historyReadUrls, historyTabs,
+                            "step " + step + ": " + action.toJson()
+                            + " -> corrected by guard: " + askReason,
+                            null);
+                    trimHistory(history, historyReadUrls, historyTabs);
+                    // A correction is not stagnation.
+                    unchanged = 0;
+                    ts.lastSignature = null;
+                    continue steps;
+                }
+
+                // -- tab guard (v3.15, R7: agent-loop, permanent) --
+                // Two refusals, both corrected through the guard
+                // machinery (the proposal does not execute and is
+                // not stagnation), never a crash:
+                //   - a tab action in a run kind that pins tab 1
+                //     (tabsEnabled false: watched, scheduled and
+                //     replay runs) — tabs simply do not exist
+                //     there;
+                //   - a fourth open_tab — the cap is
+                //     RelevanceGuard.TAB_CAP, judged by the pure
+                //     tabLimitReason against the book's count.
+                //     tabHere enforces the same cap at execution
+                //     (defense in depth).
+                String tabReason = null;
+                if (isTabKind(action) && !tabsEnabled) {
+                    tabReason = "tabs are not available in this "
+                            + "kind of run (watched, scheduled and "
+                            + "replay runs stay on tab 1). Work "
+                            + "with the page you have.";
+                } else {
+                    tabReason = RelevanceGuard.tabLimitReason(
+                            action, book.states.size());
+                }
+                if (tabReason != null) {
+                    trail.record("guard", step, Trail.fields(
+                            "action", action.toMap(),
+                            "outcome", "correct",
+                            "reason", tabReason));
+                    ui.feed("Step " + step + ": guard corrected "
+                            + action.describe(null)
+                            + "  [tab limit -> not executed]");
+                    addHistory(history, historyReadUrls, historyTabs,
+                            "step " + step + ": " + action.toJson()
+                            + " -> corrected by guard: " + tabReason,
+                            null);
+                    trimHistory(history, historyReadUrls, historyTabs);
+                    // A correction is not stagnation.
+                    unchanged = 0;
+                    ts.lastSignature = null;
                     continue steps;
                 }
 
                 // -- govern (record-before-execute) ---------------------------
                 Governor.Decision decision = governor.evaluate(action, element, perception.url);
-                trail.record("govern", step, Trail.fields(
+                // v3.13 (R5 — site grants): a remembered approval
+                // can answer this decision's ask. The question is
+                // put only now — after the Governor has decided —
+                // and grantFor's own shape (see its doc) is the
+                // precedence: a grant never sees a denial.
+                SiteGrants.Grant grantUsed = grantFor(decision,
+                        action, perception.url);
+                Map<String, Object> governFields = Trail.fields(
                         "action", action.toMap(),
                         "classification", decision.classification,
                         "outcome", decision.outcome,
-                        "reason", decision.reason));
+                        "reason", decision.reason);
+                if (grantUsed != null) {
+                    // The audit stamp: why no human was asked.
+                    governFields.put("grant_used", grantUsed.stamp());
+                }
+                trail.record("govern", step, governFields);
                 ui.feed("Step " + step + ": " + action.describe(element)
                         + "  [" + decision.classification + " -> " + decision.outcome + "]"
                         + modelStatsLine(stats));
@@ -1453,15 +2256,25 @@ public class Agent {
                     return;
                 }
                 if (Governor.ASK.equals(decision.outcome)) {
-                    boolean approved = ui.approve(action, decision, action.describe(element));
-                    trail.record("approval", step, Trail.fields(
-                            "phase", "decision",
-                            "classification", decision.classification,
-                            "action", action.toMap(),
-                            "approved", Boolean.valueOf(approved)));
-                    if (!approved) {
-                        stop(step, "denied", "approver declined the action");
-                        return;
+                    if (grantUsed != null) {
+                        // No panel, no approval event — no human
+                        // was asked. The govern record's stamp is
+                        // the account; this feed line is its
+                        // announcement at execution time.
+                        ui.feed("Step " + step
+                                + ": approved by your saved grant for "
+                                + grantUsed.host);
+                    } else {
+                        boolean approved = ui.approve(action, decision, action.describe(element));
+                        trail.record("approval", step, Trail.fields(
+                                "phase", "decision",
+                                "classification", decision.classification,
+                                "action", action.toMap(),
+                                "approved", Boolean.valueOf(approved)));
+                        if (!approved) {
+                            stop(step, "denied", "approver declined the action");
+                            return;
+                        }
                     }
                 }
 
@@ -1479,9 +2292,19 @@ public class Agent {
                     // govern -> execute -> note order keeps
                     // record-before-execute true for the new
                     // action too.
+                    // v3.15 (R7): a tab action's body is the tab
+                    // book, not the page — tabHere moves the
+                    // hands' tabs and the book together and
+                    // records the tab event on success, between
+                    // this execute record and the result, exactly
+                    // where note's event sits for its action.
                     result = "note".equals(action.action)
                             ? noteHere(action, perception, step)
-                            : execute(action);
+                            : ("ask".equals(action.action)
+                                    ? askHere(action, step)
+                                    : (isTabKind(action)
+                                            ? tabHere(action, step, book)
+                                            : execute(action)));
                 } catch (Exception e) {
                     result = "error: " + e.getMessage();
                     trail.record("result", step, Trail.fields(
@@ -1489,7 +2312,32 @@ public class Agent {
                     stop(step, "error", "action failed: " + e.getMessage());
                     return;
                 }
+                // v3.15 (R7): a tab action may have moved the
+                // active tab — rebind this step's per-tab state
+                // before the post-execute bookkeeping reads it.
+                ts = book.cur();
                 boolean ok = result != null && !result.startsWith("error");
+                // v3.12 (R4): an ask that went unanswered ends the
+                // run here — honestly, as a stuck stop whose
+                // summary names the silence ("no answer to my
+                // question"). The result is recorded first (the
+                // ask executed; the wait simply returned nothing),
+                // and the ending stays inside the stuck family on
+                // purpose: the card renders it as a stuck ending
+                // and the strategy retry may offer a counter-move.
+                // No co-pilot offer is made for it — offerAssist
+                // lives at the stuck-stop call sites, and a user
+                // who did not answer a direct question is not
+                // rescued by a tap prompt. The run NEVER guesses
+                // an answer and proceeds.
+                if (askStopPending) {
+                    trail.record("result", step, Trail.fields(
+                            "ok", Boolean.FALSE,
+                            "result", truncate(result, 300)));
+                    ui.feed("   -> " + truncate(result, 160));
+                    stop(step, "stuck", "no answer to my question");
+                    return;
+                }
                 // -- navigation-race re-decide (v2.2) ------------------
                 // The planner decided against `perception`, but a slow
                 // navigation can land DURING the 40-100 s generation:
@@ -1647,30 +2495,30 @@ public class Agent {
                         && Eyes.isLink(element)
                         && RelevanceGuard.isSearchResultsPage(
                                 perception.title, perception.url)) {
-                    lastResultsUrl = perception.url;
-                    arrivedViaResultsLink = true;
+                    ts.lastResultsUrl = perception.url;
+                    ts.arrivedViaResultsLink = true;
                 } else if (ok && ("tap".equals(action.action)
                         || "goto".equals(action.action)
                         || "back".equals(action.action)
                         || "search".equals(action.action))) {
-                    arrivedViaResultsLink = false;
+                    ts.arrivedViaResultsLink = false;
                 }
                 if (ok && "search".equals(action.action)) {
                     searched = true;
                     // v1.2: remember where we are — the results page for
                     // this query — so a repeat of the same search can be
                     // corrected instead of executed (and stuck-counted).
-                    lastSearchQuery = action.query;
-                    onSearchResults = true;
+                    ts.lastSearchQuery = action.query;
+                    ts.onSearchResults = true;
                     // v1.3: the execution-history record for the
                     // hardened repeat-search condition.
-                    lastExecutedSearchQuery = action.query;
-                    navigatedSinceSearch = false;
+                    ts.lastExecutedSearchQuery = action.query;
+                    ts.navigatedSinceSearch = false;
                 }
                 if (ok && ("tap".equals(action.action) || "type".equals(action.action)
                         || "goto".equals(action.action) || "back".equals(action.action))) {
                     // A navigating action leaves the results page behind.
-                    onSearchResults = false;
+                    ts.onSearchResults = false;
                 }
                 if (ok && ("tap".equals(action.action) || "goto".equals(action.action)
                         || "read".equals(action.action) || "type".equals(action.action))) {
@@ -1678,7 +2526,20 @@ public class Agent {
                     // since the last search — the history-based repeat
                     // condition disarms (a later deliberate re-search is
                     // the stuck counter's problem again).
-                    navigatedSinceSearch = true;
+                    ts.navigatedSinceSearch = true;
+                }
+                if (ok && "read".equals(action.action)) {
+                    // v3.10 (R2): the style guards' read evidence —
+                    // this page has now been read (Careful's verify
+                    // guard stands down for it until the next
+                    // navigation) and it joins the run's distinct
+                    // read pages (Thorough's cross-check counts
+                    // them).
+                    ts.readPageUrls.add(perception.url);
+                    if (perception.url != null
+                            && perception.url.equals(ts.navUrl)) {
+                        ts.navPageRead = true;
+                    }
                 }
                 if (ok && "read".equals(action.action)
                         && readReachedEnd(result)
@@ -1702,7 +2563,7 @@ public class Agent {
                     // pages, so arrival cannot arm there either.)
                     int total = readTotalChars(result);
                     if (total > 0) {
-                        readCompleteTotals.put(perception.url,
+                        ts.readCompleteTotals.put(perception.url,
                                 Integer.valueOf(total));
                     }
                 }
@@ -1713,8 +2574,25 @@ public class Agent {
                 // is the answer's evidence); everything else stays lean.
                 // A successful search also leaves a deterministic note so
                 // the next prompt steers the planner at the results.
+                // v3.12 (R4): an ask's result — the user's own
+                // answer, stamped as theirs by the result text
+                // itself — is carried at a middle cap: the answer
+                // is the step's whole payload, and the ordinary
+                // 120 would clip a real answer out of the prompt
+                // that must act on it.
+                // v3.16 (R8): a read_file result is evidence of
+                // exactly the read kind — a document's text is
+                // the answer's evidence as a page's is — so it is
+                // carried at the read cap and earns the same
+                // one-time NOTE_HINT. It is NOT a page read: no
+                // readPageUrls, no completion totals, no entry
+                // read-URL (the stubbing keys on pages) — a
+                // document's facts reach done only through the
+                // scratchpad, like a second tab's do (R7).
                 int historyCap = "read".equals(action.action)
-                        ? READ_HISTORY_CHARS : 120;
+                        || "read_file".equals(action.action)
+                        ? READ_HISTORY_CHARS
+                        : ("ask".equals(action.action) ? 600 : 120);
                 String entry = "step " + step + ": " + action.toJson()
                         + " -> " + truncate(result, historyCap);
                 // v3.1: the scratchpad nudge — the FIRST successful
@@ -1723,7 +2601,8 @@ public class Agent {
                 // per run, never repeated: later reads' entries are
                 // untouched, and a run that never reads successfully
                 // never sees it.
-                if (ok && "read".equals(action.action)
+                if (ok && ("read".equals(action.action)
+                        || "read_file".equals(action.action))
                         && !noteHintGiven) {
                     noteHintGiven = true;
                     entry += NOTE_HINT;
@@ -1740,8 +2619,8 @@ public class Agent {
                 // chunk when the auto-read section shows the same page.
                 String entryReadUrl = (ok && "read".equals(action.action))
                         ? perception.url : null;
-                addHistory(history, historyReadUrls, entry, entryReadUrl);
-                trimHistory(history, historyReadUrls);
+                addHistory(history, historyReadUrls, historyTabs, entry, entryReadUrl);
+                trimHistory(history, historyReadUrls, historyTabs);
 
                 if ("wait".equals(action.action)) {
                     try {
@@ -1752,8 +2631,337 @@ public class Agent {
                 }
                 break;
             }
+            // v3.7 (step screenshots): the step is over — its
+            // action executed and its result is in history, so
+            // the page shows what the step did. Only the break
+            // above reaches this line: the re-decide paths
+            // continue the SAME step (no photograph of an
+            // attempt), and every path that ended the run left
+            // through stop() — those endings are the run-end
+            // photograph's moment.
+            if (stepShotsOn) ui.onStepEnd(step);
         }
         stop(maxSteps, "budget", "step budget exhausted");
+    }
+
+    /**
+     * v3.12 (R4): execute an `ask` action — put the planner's
+     * clarifying question to the user and wait for the answer.
+     * The "ask" trail event is written BEFORE the question is
+     * put (record-before-execute, like every other action), and
+     * an answered question writes an "answer" event carrying
+     * provenance USER — the words are the user's own. The wait
+     * runs on the active pack's approval clock (pauseTimeoutMs):
+     * an ask is a pause of exactly the approval family's shape.
+     *
+     * Silence discipline: a null or blank answer is NO answer.
+     * askStopPending is set and an error-shaped result returned;
+     * the loop reads the flag immediately after the dispatch and
+     * stops the run "stuck" with the summary "no answer to my
+     * question" — the run never guesses and proceeds. An
+     * answered ask spends one of the run's ask budget
+     * (RelevanceGuard.ASK_CAP, enforced by the ask guard before
+     * the governor ever sees the proposal).
+     */
+    private String askHere(GhAction a, int step) {
+        askStopPending = false;
+        asksUsed++;
+        trail.record("ask", step, Trail.fields(
+                "question", a.question));
+        ui.feed("Step " + step + ": asking you: " + a.question);
+        String answer = ui.askUser(a.question, pauseTimeoutMs());
+        if (answer != null) answer = answer.trim();
+        if (answer == null || answer.length() == 0) {
+            askStopPending = true;
+            return "error: no answer to my question";
+        }
+        trail.record("answer", step, Trail.fields(
+                "question", a.question,
+                "answer", truncate(answer, 300),
+                "provenance", "USER"));
+        return "ok: Ryan (the user) answered: \"" + answer + "\"";
+    }
+
+    // ---------------- v3.15: multi-tab (R7) ----------------
+
+    /** Is this action one of the three tab actions? */
+    public static boolean isTabKind(GhAction a) {
+        return a != null && ("open_tab".equals(a.action)
+                || "switch_tab".equals(a.action)
+                || "close_tab".equals(a.action));
+    }
+
+    /**
+     * One tab's share of the loop state — everything that used
+     * to be a single slot in run() and is now per-tab, so two
+     * tabs never leak into each other:
+     *   - the perception-delta cursor (MapDelta.State): the R2
+     *     deltas are per-tab — a tab's "last full map" is its
+     *     own, and returning to a tab resumes its cursor;
+     *   - the style guards' page state: navUrl / navPageRead
+     *     (Careful's verify-read judges the ACTIVE tab's page)
+     *     and readPageUrls (Thorough's cross-check counts the
+     *     active tab's distinct read pages);
+     *   - the auto-read triple (v1.3) and the read-completion
+     *     totals (v1.9): what was read, and how far, in THIS
+     *     tab;
+     *   - the repeat-search state (v1.2/v1.3) and the detour
+     *     pair (v2.5): search flow is a per-page affair;
+     *   - lastSignature: the stuck detector compares the
+     *     ACTIVE tab's fresh perception against the signature
+     *     that tab last showed — switching tabs is movement,
+     *     never stagnation on the tab left behind.
+     * Run-global state (the scratchpad, the guards' correction
+     * counts, the ask/assist budgets, the step budget, the
+     * repeat-action ledger, the history itself) deliberately
+     * does NOT live here: it stays in run(), shared by every
+     * tab, exactly as the brief's state discipline prescribes.
+     */
+    private static final class TabState {
+        final MapDelta.State deltaState = new MapDelta.State();
+        String navUrl = null;
+        boolean navPageRead = false;
+        final Set<String> readPageUrls = new LinkedHashSet<String>();
+        final Set<String> autoReadUrls = new LinkedHashSet<String>();
+        String autoReadUrl = null;
+        String autoReadSection = null;
+        final Map<String, Integer> readCompleteTotals =
+                new LinkedHashMap<String, Integer>();
+        String lastSignature = null;
+        String lastSearchQuery = null;
+        boolean onSearchResults = false;
+        String lastExecutedSearchQuery = null;
+        boolean navigatedSinceSearch = false;
+        String lastResultsUrl = null;
+        boolean arrivedViaResultsLink = false;
+    }
+
+    /** The run's tab book: the loop's mirror of the browser's
+     *  tabs — one TabState per open tab, the last-known url of
+     *  each (the roster's raw material; the active entry is
+     *  refreshed from every perception), and which is active
+     *  (0-based here; 1-based in actions, the roster and the
+     *  trail). The hands own the real tabs; the book is how
+     *  the loop reasons about them without a WebView in sight,
+     *  and tabHere keeps the two in step. */
+    private static final class TabBook {
+        final List<TabState> states = new ArrayList<TabState>();
+        final List<String> urls = new ArrayList<String>();
+        int active = 0;
+        TabState cur() { return states.get(active); }
+    }
+
+    /**
+     * v3.15 (R7): the prompt's tab roster — ONE line naming
+     * every open tab by its planner-facing number and host,
+     * the active one marked: "Tabs: 1 example.test (active),
+     * 2 en.wikipedia.org". Null when fewer than two tabs are
+     * open, so a single-tab run prompts byte-identically to
+     * v3.14. Pure: the harness pins the rendering.
+     */
+    public static String tabsRosterText(List<String> tabUrls,
+                                        int activeIdx) {
+        if (tabUrls == null || tabUrls.size() < 2) return null;
+        StringBuilder sb = new StringBuilder("Tabs: ");
+        for (int i = 0; i < tabUrls.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(i + 1).append(' ')
+                    .append(rosterHost(tabUrls.get(i)));
+            if (i == activeIdx) sb.append(" (active)");
+        }
+        return sb.toString();
+    }
+
+    /** How many document names the Files line shows before
+     *  it counts the rest — the line is a roster, not a
+     *  catalogue, and the store's cap is 30 files. */
+    public static final int DOCS_LINE_MAX = 8;
+
+    /** One name's cap on the Files line. */
+    public static final int DOCS_NAME_CHARS = 48;
+
+    /**
+     * v3.16 (R8 — read documents): the prompt's Files line —
+     * ONE line naming every readable document in the
+     * downloads store, so the planner can reason about
+     * reading one: "Files: notes.txt, prices.csv — read one
+     * with read_file, naming it." The tab roster's discipline
+     * exactly: null when no readable document exists, so a
+     * run with an empty store prompts byte-identically to
+     * v3.15's. Pure: the harness pins the rendering, the caps
+     * and the null.
+     */
+    public static String docsRosterText(List<String> names) {
+        if (names == null || names.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder("Files: ");
+        int shown = Math.min(names.size(), DOCS_LINE_MAX);
+        for (int i = 0; i < shown; i++) {
+            if (i > 0) sb.append(", ");
+            String n = names.get(i);
+            if (n == null) n = "";
+            if (n.length() > DOCS_NAME_CHARS) {
+                n = n.substring(0, DOCS_NAME_CHARS - 1) + "…";
+            }
+            sb.append(n);
+        }
+        if (names.size() > shown) {
+            sb.append(", +").append(names.size() - shown).append(" more");
+        }
+        sb.append(" — read one with read_file, naming it.");
+        return sb.toString();
+    }
+
+    /** The roster's name for a tab: its host, or "blank" for a
+     *  tab with no page yet, or the raw url when it names no
+     *  host the roster can show. */
+    private static String rosterHost(String url) {
+        if (url == null || url.length() == 0
+                || "about:blank".equals(url)) {
+            return "blank";
+        }
+        String host = SiteGrants.hostOf(url);
+        return (host != null && host.length() > 0) ? host : url;
+    }
+
+    /**
+     * v3.15 (R7): execute a tab action — move the hands' tabs
+     * and the run's book together, and record the tab event.
+     * The event is written on SUCCESS only, between the loop's
+     * execute and result records (where a note event sits for
+     * its action): a refused move records nothing, because no
+     * tab changed. Refusals are legible result strings the
+     * planner can act on, in the guard messages' register —
+     * the tab cap (defense in depth behind the tab guard),
+     * a tab number that does not exist, and the last tab,
+     * which never closes (a run always has a page). Switching
+     * to the tab already active is an ok no-op.
+     */
+    private String tabHere(GhAction a, int step, TabBook book) {
+        if ("open_tab".equals(a.action)) {
+            if (book.states.size() >= RelevanceGuard.TAB_CAP) {
+                return "error: tab limit — " + RelevanceGuard.TAB_CAP
+                        + " tabs already open; switch to one with "
+                        + "switch_tab or close one with close_tab";
+            }
+            String r;
+            try {
+                r = hands.openTab(a.url);
+            } catch (Exception e) {
+                return "error: " + e.getMessage();
+            }
+            if (r == null || r.startsWith("error")) {
+                return (r == null) ? "error: open_tab failed" : r;
+            }
+            int idx = book.states.size();
+            book.states.add(new TabState());
+            String u = a.url;
+            try {
+                String hu = hands.tabUrl(idx);
+                if (hu != null) u = hu;
+            } catch (Exception ignored) { }
+            book.urls.add(u);
+            book.active = idx;
+            trail.record("tab_opened", step, Trail.fields(
+                    "tab", Long.valueOf(idx + 1),
+                    "url", u,
+                    "via", "planner"));
+            return r;
+        }
+        if ("switch_tab".equals(a.action)) {
+            int idx = a.tab - 1;
+            if (idx < 0 || idx >= book.states.size()) {
+                return "error: no tab " + a.tab + " — tabs open: 1.."
+                        + book.states.size();
+            }
+            if (idx == book.active) {
+                return "ok: already on tab " + a.tab;
+            }
+            String r;
+            try {
+                r = hands.switchTab(idx);
+            } catch (Exception e) {
+                return "error: " + e.getMessage();
+            }
+            if (r == null || r.startsWith("error")) {
+                return (r == null) ? "error: switch_tab failed" : r;
+            }
+            book.active = idx;
+            try {
+                String hu = hands.tabUrl(idx);
+                if (hu != null) book.urls.set(idx, hu);
+            } catch (Exception ignored) { }
+            trail.record("tab_switched", step, Trail.fields(
+                    "tab", Long.valueOf(idx + 1),
+                    "url", book.urls.get(idx)));
+            return r;
+        }
+        // close_tab
+        int idx = a.tab - 1;
+        if (book.states.size() <= 1) {
+            return "error: cannot close the last tab";
+        }
+        if (idx < 0 || idx >= book.states.size()) {
+            return "error: no tab " + a.tab + " — tabs open: 1.."
+                    + book.states.size();
+        }
+        String closedUrl = book.urls.get(idx);
+        String r;
+        try {
+            r = hands.closeTab(idx);
+        } catch (Exception e) {
+            return "error: " + e.getMessage();
+        }
+        if (r == null || r.startsWith("error")) {
+            return (r == null) ? "error: close_tab failed" : r;
+        }
+        book.states.remove(idx);
+        book.urls.remove(idx);
+        if (idx < book.active) {
+            book.active--;
+        } else if (idx == book.active) {
+            // The tab that took the closed one's place (or the
+            // new last tab) becomes active — the browser's own
+            // convention, and the hands were told the same.
+            book.active = Math.min(idx, book.states.size() - 1);
+        }
+        trail.record("tab_closed", step, Trail.fields(
+                "tab", Long.valueOf(idx + 1),
+                "url", closedUrl,
+                "active", Long.valueOf(book.active + 1)));
+        return r;
+    }
+
+    /**
+     * v3.15 (R7): the done-grounding guard's evidence, judged
+     * per tab — the history entries the ACTIVE tab produced
+     * (historyTabs is addHistory's parallel tab stamp), the
+     * active tab's auto-read section, and the scratchpad's
+     * facts. The scratchpad is deliberately NOT filtered: notes
+     * are the sanctioned channel by which a fact read in one
+     * tab may ground an answer given from another. A null
+     * historyTabs (a caller predating the stamp) judges the
+     * whole history, exactly as the 3-arg form does.
+     */
+    public static String groundingEvidence(List<String> history,
+                                           List<Integer> historyTabs,
+                                           int activeTab,
+                                           String autoReadText,
+                                           Scratchpad pad) {
+        if (historyTabs == null) {
+            return groundingEvidence(history, autoReadText, pad);
+        }
+        StringBuilder sb = new StringBuilder();
+        if (history != null) {
+            for (int i = 0; i < history.size(); i++) {
+                Integer t = (i < historyTabs.size())
+                        ? historyTabs.get(i) : null;
+                if (t != null && t.intValue() != activeTab) continue;
+                sb.append(history.get(i)).append('\n');
+            }
+        }
+        if (autoReadText != null) sb.append(autoReadText).append('\n');
+        if (pad != null) sb.append(pad.factsText());
+        return sb.toString();
     }
 
     /**
@@ -1849,7 +3057,8 @@ public class Agent {
      */
     private boolean offerAssist(int step, String stuckSummary,
                                 List<String> history,
-                                List<String> historyReadUrls) {
+                                List<String> historyReadUrls,
+                                List<Integer> historyTabs) {
         // v3.4: the co-pilot setting gates the offer itself —
         // off, a stuck stop is a stuck stop, exactly as it was
         // before v3.3, and nothing about any guard changes.
@@ -1879,12 +3088,12 @@ public class Agent {
                 "provenance", "user",
                 "element", tapped.descriptor(),
                 "name", tapped.name));
-        addHistory(history, historyReadUrls,
+        addHistory(history, historyReadUrls, historyTabs,
                 "step " + step + ": you were stuck (" + stuckSummary
                 + "); the user tapped \"" + assistName(tapped)
                 + "\" to get past a stuck point. Continue from "
                 + "the page as it is now.", null);
-        trimHistory(history, historyReadUrls);
+        trimHistory(history, historyReadUrls, historyTabs);
         ui.feed("Step " + step + ": the user tapped \""
                 + assistName(tapped) + "\" — continuing.");
         return true;
@@ -1909,12 +3118,23 @@ public class Agent {
         runStartMs = System.currentTimeMillis();
         totalPromptTokens = 0;
         totalReusedTokens = 0;
+        totalGenTokens = 0;
+        totalGenMs = 0;
         assistsUsed = 0;
         trail.record("run", 0, Trail.fields(
                 "goal", "Route: " + route.name,
                 "pack", pack.name,
                 "model", modelId,
-                "grammar_setting", Boolean.valueOf(grammarSettingOn)));
+                "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                "threads", Long.valueOf(runThreads()),
+                "fallback_engine", fallbackEngineId,
+                "desktop_mode", Boolean.valueOf(desktopModeOn),
+                "prefix_cache", Boolean.valueOf(prefixCacheSettingOn),
+                "end_view", Settings.endViewName(endViewSetting),
+                "step_shots", Boolean.valueOf(stepShotsOn),
+                "screen_awake", Boolean.valueOf(screenAwakeSettingOn),
+                "battery_guard", Boolean.valueOf(
+                        batteryGuardSettingOn)));
         trail.record("route", 0, Trail.fields(
                 "phase", "start",
                 "name", route.name,
@@ -1995,9 +3215,41 @@ public class Agent {
                 a.text = (rs.text == null) ? "" : rs.text;
             }
             if (!routeAction(step, a, target, perception.url)) return;
+            // v3.7 (step screenshots): an executed replay step
+            // ends here, as an agent step does. The user-fill
+            // steps above deliberately never reach this line —
+            // the fill is the user's own screen, not the
+            // replay's photograph to take.
+            if (stepShotsOn) ui.onStepEnd(step);
         }
         stop(route.steps.size(), "done", "route \"" + route.name
                 + "\" completed (" + route.steps.size() + " steps)");
+    }
+
+    /**
+     * v3.13 (R5 — site grants): the grant that answers this
+     * decision's ask, or null. Called only with a decision the
+     * Governor has ALREADY made, and its own shape is the
+     * precedence the release promises: only an ASK outcome
+     * with classification CONSEQUENTIAL can be answered at
+     * all, so the seatbelt deny pass, the domain rules and the
+     * readonly pack (which deny, never ask) are never reached
+     * by a grant — denied stays denied, and scheduled runs
+     * (readonly-forced) can never spend one. The host is the
+     * CURRENT page's — the site the action would act on — and
+     * a page that names no host (about:blank, file://) can
+     * never match.
+     */
+    private SiteGrants.Grant grantFor(Governor.Decision decision,
+                                      GhAction action, String pageUrl) {
+        if (grantBook == null) return null;
+        if (!Governor.ASK.equals(decision.outcome)) return null;
+        if (!Governor.CONSEQUENTIAL.equals(decision.classification)) {
+            return null;
+        }
+        String host = SiteGrants.hostOf(pageUrl);
+        if (host.length() == 0) return null;
+        return grantBook.find(host, action.action);
     }
 
     /**
@@ -2011,13 +3263,21 @@ public class Agent {
     private boolean routeAction(int step, GhAction a, ElementInfo element,
                                 String pageUrl) {
         Governor.Decision decision = governor.evaluate(a, element, pageUrl);
-        trail.record("govern", step, Trail.fields(
+        // v3.13 (R5 — site grants): a replay is a run for grant
+        // purposes — the same post-decision consultation, the
+        // same govern stamp beside the route provenance.
+        SiteGrants.Grant grantUsed = grantFor(decision, a, pageUrl);
+        Map<String, Object> governFields = Trail.fields(
                 "action", a.toMap(),
                 "classification", decision.classification,
                 "outcome", decision.outcome,
                 "reason", decision.reason,
                 "provenance", "route_replay",
-                "route_step", Long.valueOf(step)));
+                "route_step", Long.valueOf(step));
+        if (grantUsed != null) {
+            governFields.put("grant_used", grantUsed.stamp());
+        }
+        trail.record("govern", step, governFields);
         ui.feed("Step " + step + ": " + a.describe(element)
                 + "  [" + decision.classification + " -> "
                 + decision.outcome + "]");
@@ -2026,17 +3286,23 @@ public class Agent {
             return false;
         }
         if (Governor.ASK.equals(decision.outcome)) {
-            boolean approved = ui.approve(a, decision, a.describe(element));
-            trail.record("approval", step, Trail.fields(
-                    "phase", "decision",
-                    "classification", decision.classification,
-                    "action", a.toMap(),
-                    "approved", Boolean.valueOf(approved),
-                    "provenance", "route_replay",
-                    "route_step", Long.valueOf(step)));
-            if (!approved) {
-                stop(step, "denied", "approver declined the action");
-                return false;
+            if (grantUsed != null) {
+                ui.feed("Step " + step
+                        + ": approved by your saved grant for "
+                        + grantUsed.host);
+            } else {
+                boolean approved = ui.approve(a, decision, a.describe(element));
+                trail.record("approval", step, Trail.fields(
+                        "phase", "decision",
+                        "classification", decision.classification,
+                        "action", a.toMap(),
+                        "approved", Boolean.valueOf(approved),
+                        "provenance", "route_replay",
+                        "route_step", Long.valueOf(step)));
+                if (!approved) {
+                    stop(step, "denied", "approver declined the action");
+                    return false;
+                }
             }
         }
         trail.record("execute", step, Trail.fields(
@@ -2069,11 +3335,15 @@ public class Agent {
     private String execute(GhAction a) throws Exception {
         if ("tap".equals(a.action)) return hands.tap(a.el);
         if ("type".equals(a.action)) return hands.type(a.el, a.text == null ? "" : a.text);
+        if ("choose".equals(a.action)) return hands.choose(a.el, a.text == null ? "" : a.text);
+        if ("toggle".equals(a.action)) return hands.toggle(a.el, a.text);
         if ("goto".equals(a.action)) return hands.gotoUrl(a.url);
         if ("scroll".equals(a.action)) return hands.scroll(a.dir == null ? "down" : a.dir);
         if ("back".equals(a.action)) return hands.back();
         if ("search".equals(a.action)) return hands.search(a.query == null ? "" : a.query);
         if ("read".equals(a.action)) return hands.read(currentReadChunkChars);
+        if ("read_file".equals(a.action)) return hands.readDocument(
+                a.name == null ? "" : a.name, currentReadChunkChars);
         if ("wait".equals(a.action)) return "ok: waited " + a.ms + "ms";
         return "error: unhandled action " + a.action;
     }
@@ -2092,19 +3362,49 @@ public class Agent {
         // as written; this is a separate line).
         long seconds = (runStartMs > 0)
                 ? (System.currentTimeMillis() - runStartMs) / 1000 : 0;
-        trail.record("run_summary", step, Trail.fields(
-                "outcome", reason,
-                "model", modelId,
-                "grammar_setting", Boolean.valueOf(grammarSettingOn),
-                "steps", Long.valueOf(step),
-                "seconds", Long.valueOf(seconds),
-                "prompt_tokens", Long.valueOf(totalPromptTokens),
-                "reused_tokens", Long.valueOf(totalReusedTokens),
-                "reuse_percent", Long.valueOf(
-                        reusePercent(totalPromptTokens, totalReusedTokens))));
-        ui.feed(runSummaryLine(reason, step, seconds,
-                totalPromptTokens, totalReusedTokens));
-        ui.status("Agent stopped: " + reason);
+        // v3.6 (live stats): with the setting on, the summary
+        // record also carries the generation tallies, the feed
+        // line names the speed, and the stopped status keeps the
+        // run's stats in the status area (the "last run" half of
+        // the feature). With it off, the record, the line and the
+        // status are byte-for-byte v3.5's.
+        if (liveStatsOn) {
+            trail.record("run_summary", step, Trail.fields(
+                    "outcome", reason,
+                    "model", modelId,
+                    "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                    "steps", Long.valueOf(step),
+                    "seconds", Long.valueOf(seconds),
+                    "prompt_tokens", Long.valueOf(totalPromptTokens),
+                    "reused_tokens", Long.valueOf(totalReusedTokens),
+                    "reuse_percent", Long.valueOf(
+                            reusePercent(totalPromptTokens, totalReusedTokens)),
+                    "gen_tokens", Long.valueOf(totalGenTokens),
+                    "gen_ms", Long.valueOf(totalGenMs)));
+            ui.feed(runSummaryLine(reason, step, seconds,
+                    totalPromptTokens, totalReusedTokens,
+                    totalGenTokens, totalGenMs));
+            ui.status("Agent stopped: " + reason
+                    + (totalGenTokens > 0
+                            ? " · ⚡ " + statsFragment(totalGenTokens,
+                                    totalGenMs, totalPromptTokens,
+                                    totalReusedTokens)
+                            : ""));
+        } else {
+            trail.record("run_summary", step, Trail.fields(
+                    "outcome", reason,
+                    "model", modelId,
+                    "grammar_setting", Boolean.valueOf(grammarSettingOn),
+                    "steps", Long.valueOf(step),
+                    "seconds", Long.valueOf(seconds),
+                    "prompt_tokens", Long.valueOf(totalPromptTokens),
+                    "reused_tokens", Long.valueOf(totalReusedTokens),
+                    "reuse_percent", Long.valueOf(
+                            reusePercent(totalPromptTokens, totalReusedTokens))));
+            ui.feed(runSummaryLine(reason, step, seconds,
+                    totalPromptTokens, totalReusedTokens));
+            ui.status("Agent stopped: " + reason);
+        }
         currentStep = 0;
     }
 
@@ -2130,21 +3430,92 @@ public class Agent {
                 + "% of prompt reused";
     }
 
+    // ---------------- v3.6: live stats ----------------
+    // The display half of the DIAGNOSTICS live-stats setting:
+    // pure formatting over the run's tallies, pinned by the
+    // harness. Nothing here is consulted unless the run's
+    // liveStatsOn is set — off, no line changes anywhere.
+
+    /** Generation speed over a run (or a run so far): tokens
+     *  per second, as a double. No generation time on the clock
+     *  reads as 0, never a division by zero. */
+    public static double genTokPerSec(long genTokens, long genMs) {
+        if (genTokens <= 0 || genMs <= 0) return 0.0;
+        return (genTokens * 1000.0) / genMs;
+    }
+
+    /** A speed with one decimal ("13.9"), US locale — the
+     *  decimal point never becomes a comma on a travelled
+     *  phone. */
+    public static String formatTokPerSec(double tokPerSec) {
+        return String.format(java.util.Locale.US, "%.1f",
+                Double.valueOf(tokPerSec));
+    }
+
+    /** The shared stats fragment: "13.9 tok/s · 68% prompt
+     *  reused" — generation speed over the run's tallies and
+     *  the prompt-cache reuse share of them. */
+    public static String statsFragment(long genTokens, long genMs,
+                                       long promptTokens,
+                                       long reusedTokens) {
+        return formatTokPerSec(genTokPerSec(genTokens, genMs))
+                + " tok/s · "
+                + reusePercent(promptTokens, reusedTokens)
+                + "% prompt reused";
+    }
+
+    /** The live status-area line during a run (live stats on):
+     *  the fragment, tagged with the step just decided. */
+    public static String liveStatusText(int step, long genTokens,
+                                        long genMs, long promptTokens,
+                                        long reusedTokens) {
+        return "⚡ " + statsFragment(genTokens, genMs, promptTokens,
+                reusedTokens) + " · step " + step;
+    }
+
+    /** The run-summary feed line with live stats on: the classic
+     *  line, plus the generation speed when the run generated
+     *  anything (a run stopped before its first decide keeps the
+     *  classic shape). */
+    public static String runSummaryLine(String outcome, int steps,
+                                        long seconds, long promptTokens,
+                                        long reusedTokens,
+                                        long genTokens, long genMs) {
+        String base = runSummaryLine(outcome, steps, seconds,
+                promptTokens, reusedTokens);
+        if (genTokens <= 0) return base;
+        return base + ", gen "
+                + formatTokPerSec(genTokPerSec(genTokens, genMs))
+                + " tok/s";
+    }
+
     /** v1.8: the ONLY way history entries are added: the entry and
      *  its read-source URL (null unless the entry is a read result)
-     *  go in together, keeping the two lists the same length. */
-    private static void addHistory(List<String> history,
-                                   List<String> historyReadUrls,
-                                   String entry, String readUrl) {
+     *  go in together, keeping the two lists the same length.
+     *  v3.15 (R7): a third list rides along — the index of the
+     *  tab the entry was produced in, read from the running
+     *  loop's tab book (tabBook, set by run() before its first
+     *  step; 0 when no book is in force) — so the done-grounding
+     *  guard can judge a done against the ACTIVE tab's entries
+     *  only. No longer static for exactly that reason; every
+     *  caller is the loop or its own helpers. */
+    private void addHistory(List<String> history,
+                            List<String> historyReadUrls,
+                            List<Integer> historyTabs,
+                            String entry, String readUrl) {
         history.add(entry);
         historyReadUrls.add(readUrl);
+        historyTabs.add(Integer.valueOf(
+                tabBook == null ? 0 : tabBook.active));
     }
 
     private static void trimHistory(List<String> history,
-                                    List<String> historyReadUrls) {
+                                    List<String> historyReadUrls,
+                                    List<Integer> historyTabs) {
         while (history.size() > HISTORY_KEPT) {
             history.remove(0);
             if (!historyReadUrls.isEmpty()) historyReadUrls.remove(0);
+            if (!historyTabs.isEmpty()) historyTabs.remove(0);
         }
     }
 
@@ -2293,31 +3664,147 @@ public class Agent {
      * history note quotes survives verbatim, and the block stays
      * within the v2.4 budget pin (332 est) with the standing text
      * under its own (292).
+     *
+     * v3.9 (R1 — the forms frontier): the choose/toggle syntax
+     * lines and one forms sentence ("Selects list opts=; choose
+     * by text...") joined, paid for in the same discipline —
+     * every trim in prose no guard note or test quotes, each
+     * listed in BUILD_NOTES v3.9.0: the intro's reply clause,
+     * the wait exemplar's ms and the scroll exemplar's dir
+     * (both still accepted, both still defaulted), "when the
+     * goal is met", the search rule's subject ("the target is
+     * not here"), "whose text matches", "facts the goal needs",
+     * "the page title", and the examples' "Next action JSON:"
+     * mirrors (the prompt's cue line keeps the full phrase).
+     * The pinned sentences — search-first, the homepage ban,
+     * the question-goal rule, the done-summary rule INCLUDING
+     * its noted-facts tail, the auto-read rule, the
+     * ON-the-article rule — are verbatim; the question-goal
+     * rule's pin was found by the harness during this build
+     * and the sentence restored exactly.
+     *
+     * v3.10 (R2 — perception deltas): one new standing line —
+     * the delta format ("Later steps may show only changes:
+     * + added, ~ changed, - removed; numbers from the last
+     * full map.") — paid for in the same discipline, every
+     * trim in prose no test or guard note quotes, each listed
+     * in BUILD_NOTES v3.10.0: "Reply with ONE JSON object"
+     * lost "with"; "Use only map numbers; answer done when
+     * met" lost its second clause (the done action is taught
+     * by the question-goal rule and the examples); the search
+     * rule's framing ("Rules: if the target is not here,")
+     * became "Target not here:" (the pinned "use search
+     * first" is untouched); "Never tap a link matching no
+     * goal term" became "Never tap off-goal links"; the
+     * toggle sentence lost ", or picks a"; the auto-read
+     * rule's lead-in ("If a ... section appears,") became
+     * "A Page text (auto-read) section:" and the
+     * ON-the-article rule's lead-in ("If the title matches
+     * your target,") became "Title matches:" — both rules'
+     * operative clauses ("answer from it; use read again
+     * only if...", "you are ON the article", the page-tabs
+     * ban) are byte-for-byte as before.
+     *
+     * v3.12 (R4 — the ask action): the ask shape joined the
+     * actions line and one short rule joined the rules
+     * paragraph ("If unclear, ask." — the runtime steering
+     * carries the rest: the ask guard's corrections, the
+     * answer's own result text, and the cap named in both).
+     * Paid for in the same discipline, every trim in prose no
+     * test or guard note quotes, each listed here: "Reply
+     * ONE JSON object" lost "object"; "Use only map
+     * numbers" lost "only"; the selects sentence compressed
+     * ("Toggle flips a checkbox or radio" became "toggle
+     * flips checkbox/radio"); the search rule's lead-in
+     * ("Target not here:") became "Not here:" (the pinned
+     * "use search first" untouched); "Never tap off-goal
+     * links" became "No off-goal taps"; and "Note facts."
+     * was cut — noting stays taught by the note action's own
+     * line, the first-read NOTE_HINT and the pinned
+     * done-summary rule's "facts you noted". Every pinned
+     * sentence is byte-for-byte as before; the harness
+     * re-pins the new shape and the budget.
+     *
+     * v3.15 (R7 — multi-tab): the three tab shapes joined the
+     * actions line (open_tab carrying its url, switch_tab /
+     * close_tab their tab number) and one short tabs rule
+     * joined the rules paragraph ("Tabs: 3 max; facts
+     * in-tab." — the cap and the state discipline in eight
+     * words; the roster line and the guards teach the rest).
+     * Paid for in the same discipline, every trim in prose
+     * no test or guard note quotes, each listed here: line 1
+     * lost "Reply ONE JSON." (one action per reply stands in
+     * the parser, the cue and the examples); the "Use map
+     * numbers." line was cut (the shapes themselves address
+     * by number, and an invented number dies on the map's
+     * own error); the selects sentence lost "list" and its
+     * "choose by text;" became "choose text,"; the rules
+     * paragraph lost its "Not here:" lead-in (it now opens
+     * with the pinned "use search first." itself) and "No
+     * off-goal taps." (the homepage ban and the relevance
+     * guard carry it); the question-goal lead-in compressed
+     * ("For a question goal, open the target page, then"
+     * became "Question goal: open,"); the done rule's
+     * tail "or facts you noted" became "or noted facts";
+     * the auto-read rule's lead-in "A Page text (auto-read)
+     * section:" became "Auto-read:" (its operative clause
+     * is pinned whole and untouched); the title rule's
+     * lead-in "Title matches:" became "Title match:" (its
+     * sentence is pinned whole and untouched). Every
+     * pinned sentence — search-first, the homepage ban,
+     * the question-goal rule, the done-summary rule's head,
+     * the auto-read rule, the ON-the-article rule and its
+     * page-tabs ban, the delta line, the ask shape and
+     * rule — is byte-for-byte as before, and the block
+     * matches v3.12's measure (290 est; block 330).
+     *
+     * v3.16 (R8 — read documents): the read_file shape joined
+     * the actions line, next to read (its sibling: a stored
+     * document read in chunks). No new rule sentence — the
+     * Files roster line teaches when to use it. Paid for in
+     * the same discipline, every trim in prose no test pins,
+     * each listed here: the selects sentence compressed
+     * ("Selects opts=; choose text, toggle flips
+     * checkbox/radio." became "opts=: choose text; toggle
+     * flips." — the map itself labels a toggle's
+     * checkbox/radio target); the question-goal lead-in
+     * compressed ("Question goal: open," became "Question:
+     * open," — the pinned rule after it is untouched); the
+     * title rule's lead-in compressed ("Title match:"
+     * became "Title:" — its pinned sentence is untouched);
+     * and the second worked example lost its "Text:" label
+     * (its pinned shapes — the value in the text, the value
+     * in the summary — are untouched). Every pinned
+     * sentence is byte-for-byte as before.
      */
     public static final String CONTRACT_TEXT =
-            "You are Ghost Hands, a careful web agent. Reply with EXACTLY ONE JSON object, no other text.\n"
+            "You are Ghost Hands, a careful web agent.\n"
             + "Actions: {\"action\":\"tap\",\"el\":N} {\"action\":\"type\",\"el\":N,\"text\":\"...\"} "
+            + "{\"action\":\"choose\",\"el\":N,\"text\":\"...\"} {\"action\":\"toggle\",\"el\":N,\"text\":\"...\"} "
             + "{\"action\":\"search\",\"query\":\"...\"} {\"action\":\"read\"} "
+            + "{\"action\":\"read_file\",\"name\":\"...\"} "
             + "{\"action\":\"note\",\"fact\":\"...\"} "
-            + "{\"action\":\"goto\",\"url\":\"...\"} {\"action\":\"scroll\",\"dir\":\"down\"} "
-            + "{\"action\":\"back\"} {\"action\":\"wait\",\"ms\":1000} "
+            + "{\"action\":\"ask\",\"question\":\"...\"} "
+            + "{\"action\":\"open_tab\",\"url\":\"...\"} {\"action\":\"switch_tab\",\"tab\":N} "
+            + "{\"action\":\"close_tab\",\"tab\":N} "
+            + "{\"action\":\"goto\",\"url\":\"...\"} {\"action\":\"scroll\"} "
+            + "{\"action\":\"back\"} {\"action\":\"wait\"} "
             + "{\"action\":\"done\",\"summary\":\"...\"} {\"action\":\"stuck\",\"reason\":\"...\"}\n"
-            + "Use only map numbers; answer done when the goal is met.\n"
-            + "Rules: if the goal asks to search or find something not "
-            + "on this page, use search first. "
-            + "Never tap a link whose text matches no goal term. "
+            + "opts=: choose text; toggle flips.\n"
+            + "Later steps may show only changes: + added, "
+            + "~ changed, - removed; numbers from the last full "
+            + "map.\n"
+            + "use search first. If unclear, ask. "
+            + "Tabs: 3 max; facts in-tab. "
             + "Do not tap featured or random homepage content. "
-            + "For a question goal, open the target page, then use read "
+            + "Question: open, use read "
             + "(again for more text if needed) before answering done. "
-            + "Note facts the goal needs. "
-            + "Base your done summary only on text you read or facts "
-            + "you noted. "
-            + "If a Page text (auto-read) section appears, answer "
-            + "from it; use read again only if the fact you need is "
-            + "not in it. "
-            + "If the page title matches your target, you are ON the "
-            + "article. Do not tap page tabs such as Article, Talk, "
-            + "Read, or Edit; use read.\n";
+            + "Base your done summary only on text you read or noted facts. "
+            + "Auto-read: answer from it; use "
+            + "read again only if the fact you need is not in it. "
+            + "Title: you are ON the article. Do not tap "
+            + "page tabs such as Article, Talk, Read, or Edit; use "
+            + "read.\n";
 
     /**
      * v2.4 (1.5B Max, item 1 — few-shot examples): two miniature
@@ -2336,10 +3823,10 @@ public class Agent {
      */
     public static final String EXAMPLES_TEXT =
             "Examples:\n"
-            + "Results: [4] \"Clinch River\" [9] \"Next page\" -> Next "
-            + "action JSON: {\"action\":\"tap\",\"el\":4}\n"
-            + "Goal: its length? Text: \"Length 337 mi\" -> Next "
-            + "action JSON: {\"action\":\"done\",\"summary\":\"337 "
+            + "[4] \"Clinch River\" [9] \"Next page\" -> "
+            + "{\"action\":\"tap\",\"el\":4}\n"
+            + "Goal: length? \"Length 337 mi\" -> "
+            + "{\"action\":\"done\",\"summary\":\"337 "
             + "miles long.\"}\n";
 
     /** The full never-trimmed contract block: standing text plus
@@ -2347,6 +3834,63 @@ public class Agent {
      *  never touch it, and the host harness pins its size against
      *  v2.3's (item 5's budget: the trim pays for the examples). */
     public static final String CONTRACT_BLOCK = CONTRACT_TEXT + EXAMPLES_TEXT;
+
+    /**
+     * v3.10 (R2 — planner styles): the posture line each style
+     * adds to the prompt, or null for Balanced. A non-null
+     * posture rides directly under the contract block, ahead
+     * of the goal — inside the stable prefix, stated once per
+     * prompt in the contract's own register. Balanced returns
+     * null and the prompt is byte-identical to v3.9's: the
+     * harness pins the 8-arg buildPrompt with a null posture
+     * equal to the 7-arg, and a scripted Balanced run's prompt
+     * carries no "Style:" line. The styles' mechanical halves
+     * live elsewhere: Careful's verify-read guard and
+     * Thorough's cross-check guard are RelevanceGuard rules
+     * the loop consults only under those styles, and Fast's
+     * chunk precedence is effectiveChunkPref below.
+     */
+    public static final String POSTURE_CAREFUL =
+            "Style: careful - note facts as you find them; never "
+            + "answer done on a page you have not read.";
+    public static final String POSTURE_FAST =
+            "Style: fast - prefer search over browsing, take the "
+            + "first strong result, and do not re-read what you "
+            + "already hold.";
+    public static final String POSTURE_THOROUGH =
+            "Style: thorough - cross-check the key facts on a "
+            + "second page before you answer done; note facts as "
+            + "you find them.";
+
+    /** The posture line for a planner style (a Settings
+     *  STYLE_* value); null for Balanced and for any value the
+     *  loop does not know (a strange style must never invent a
+     *  posture). */
+    public static String postureTextFor(int style) {
+        switch (Settings.clampPlannerStyle(style)) {
+            case Settings.STYLE_CAREFUL: return POSTURE_CAREFUL;
+            case Settings.STYLE_FAST: return POSTURE_FAST;
+            case Settings.STYLE_THOROUGH: return POSTURE_THOROUGH;
+            default: return null;
+        }
+    }
+
+    /**
+     * v3.10 (R2 — the Fast style's chunk precedence): the read
+     * chunk preference a run actually uses. FAST lowers the
+     * run's chunking to the Small behavior ONLY when the
+     * user's Reading setting is still Auto — an explicit Large
+     * or Small the user picked always wins over the style, and
+     * every other style leaves the preference untouched. (The
+     * auto-read path is unchunked and unaffected, as before.)
+     */
+    public static int effectiveChunkPref(int chunkPref, int style) {
+        if (Settings.clampPlannerStyle(style) == Settings.STYLE_FAST
+                && chunkPref == Settings.CHUNK_AUTO) {
+            return Settings.CHUNK_SMALL;
+        }
+        return chunkPref;
+    }
 
     /** Lean prompt: contract + goal + last steps + capped map. */
     public static String buildPrompt(String goal, Eyes.Perception p, String rendered,
@@ -2415,14 +3959,87 @@ public class Agent {
                                      List<String> history, String autoReadText,
                                      int completeTotalChars,
                                      String factsText) {
+        return buildPrompt(goal, p, rendered, history, autoReadText,
+                completeTotalChars, factsText, null);
+    }
+
+    /**
+     * v3.10 (R2 — planner styles): as the 7-arg prompt, plus the
+     * style's posture line (postureText — postureTextFor's
+     * output, or null). The posture sits directly under the
+     * contract block, ahead of the goal, inside the stable
+     * prefix. A null or empty posture leaves the prompt
+     * byte-identical to the 7-arg's — Balanced runs prompt
+     * exactly as v3.9 did (the harness pins the equality).
+     */
+    public static String buildPrompt(String goal, Eyes.Perception p, String rendered,
+                                     List<String> history, String autoReadText,
+                                     int completeTotalChars,
+                                     String factsText, String postureText) {
+        return buildPrompt(goal, p, rendered, history, autoReadText,
+                completeTotalChars, factsText, postureText, null);
+    }
+
+    /** v3.15 (R7): the 9-arg prompt — see the 10-arg below. A
+     *  null Files line, so callers that predate the documents
+     *  pack build exactly the prompt they always did. */
+    public static String buildPrompt(String goal, Eyes.Perception p, String rendered,
+                                     List<String> history, String autoReadText,
+                                     int completeTotalChars,
+                                     String factsText, String postureText,
+                                     String tabsText) {
+        return buildPrompt(goal, p, rendered, history, autoReadText,
+                completeTotalChars, factsText, postureText, tabsText,
+                null);
+    }
+
+    /**
+     * v3.15 (R7 — multi-tab): as the 8-arg prompt, plus the tab
+     * roster (tabsText — tabsRosterText's output, or null).
+     * The roster sits directly under the Page line, with the
+     * rest of the perception in the stable prefix: one line
+     * naming every open tab and which is active, so the
+     * planner can reason about switching. A null or empty
+     * roster leaves the prompt byte-identical to the 8-arg's
+     * — a run with fewer than two tabs open prompts exactly
+     * as v3.14 did (the harness pins the equality).
+     *
+     * v3.16 (R8 — read documents): plus the Files line
+     * (docsText — docsRosterText's output, or null), riding
+     * directly under the tab roster in the same stable
+     * prefix: one line naming every readable document in the
+     * store, so the planner can reason about reading one. A
+     * null or empty line leaves the prompt byte-identical to
+     * the 9-arg's — a run with no readable documents prompts
+     * exactly as v3.15 did (the harness pins the equality).
+     */
+    public static String buildPrompt(String goal, Eyes.Perception p, String rendered,
+                                     List<String> history, String autoReadText,
+                                     int completeTotalChars,
+                                     String factsText, String postureText,
+                                     String tabsText, String docsText) {
         StringBuilder sb = new StringBuilder();
         // v2.4: the contract block (standing text + worked examples)
         // is a single constant — see CONTRACT_TEXT / EXAMPLES_TEXT.
         sb.append(CONTRACT_BLOCK);
+        // v3.10: the planner style's posture line, when the run
+        // has one (Balanced has none — see postureTextFor).
+        if (postureText != null && postureText.length() > 0) {
+            sb.append(postureText).append('\n');
+        }
         sb.append("Goal: ").append(goal).append('\n');
         sb.append("Page: ").append(p.url);
         if (p.title != null && p.title.length() > 0) sb.append(" - ").append(p.title);
         sb.append('\n');
+        // v3.15: the tab roster, when more than one tab is open.
+        if (tabsText != null && tabsText.length() > 0) {
+            sb.append(tabsText).append('\n');
+        }
+        // v3.16: the Files line, when the store holds a
+        // readable document.
+        if (docsText != null && docsText.length() > 0) {
+            sb.append(docsText).append('\n');
+        }
         // v2.5: the element map rides with the rest of the
         // perception, before the history (see the layout note in
         // this method's javadoc).
@@ -2997,8 +4614,78 @@ public class Agent {
                                       int completeTotalChars,
                                       String factsText,
                                       String factsStubText) {
+        return fitPrompt(goal, p, rendered, history, historyReadUrls,
+                autoReadText, completeTotalChars, factsText,
+                factsStubText, null);
+    }
+
+    /** v3.10 (R2 — planner styles): as the 9-arg fit, plus the
+     *  style's posture line (postureText — postureTextFor's
+     *  output, or null), carried by every rung's assembly
+     *  exactly like the facts block. A null posture leaves
+     *  every rung byte-identical to the 9-arg's (the harness
+     *  pins the equality on a ladder-climbing fixture), so a
+     *  Balanced run fits exactly as v3.9's did. */
+    public static FitResult fitPrompt(String goal, Eyes.Perception p,
+                                      String rendered,
+                                      List<String> history,
+                                      List<String> historyReadUrls,
+                                      String autoReadText,
+                                      int completeTotalChars,
+                                      String factsText,
+                                      String factsStubText,
+                                      String postureText) {
+        return fitPrompt(goal, p, rendered, history, historyReadUrls,
+                autoReadText, completeTotalChars, factsText,
+                factsStubText, postureText, null);
+    }
+
+    /** v3.15 (R7 — multi-tab): as the 10-arg fit, plus the tab
+     *  roster (tabsText — tabsRosterText's output, or null),
+     *  carried by every rung's assembly exactly like the
+     *  posture. A null roster leaves every rung byte-identical
+     *  to the 10-arg's (the harness pins the equality), so a
+     *  single-tab run fits exactly as v3.14's did. The roster
+     *  is NOT degradable: it is one line, and it is the only
+     *  place the planner can learn the other tabs exist. */
+    public static FitResult fitPrompt(String goal, Eyes.Perception p,
+                                      String rendered,
+                                      List<String> history,
+                                      List<String> historyReadUrls,
+                                      String autoReadText,
+                                      int completeTotalChars,
+                                      String factsText,
+                                      String factsStubText,
+                                      String postureText,
+                                      String tabsText) {
+        return fitPrompt(goal, p, rendered, history, historyReadUrls,
+                autoReadText, completeTotalChars, factsText,
+                factsStubText, postureText, tabsText, null);
+    }
+
+    /** v3.16 (R8 — read documents): as the 11-arg fit, plus
+     *  the Files line (docsText — docsRosterText's output, or
+     *  null), carried by every rung's assembly exactly like
+     *  the roster. A null line leaves every rung byte-identical
+     *  to the 11-arg's (the harness pins the equality), so a
+     *  run with no readable documents fits exactly as v3.15's
+     *  did. The Files line is NOT degradable either: like the
+     *  roster, it is one line, and it is the only place the
+     *  planner can learn the documents exist. */
+    public static FitResult fitPrompt(String goal, Eyes.Perception p,
+                                      String rendered,
+                                      List<String> history,
+                                      List<String> historyReadUrls,
+                                      String autoReadText,
+                                      int completeTotalChars,
+                                      String factsText,
+                                      String factsStubText,
+                                      String postureText,
+                                      String tabsText,
+                                      String docsText) {
         String prompt = buildPrompt(goal, p, rendered, history,
-                autoReadText, completeTotalChars, factsText);
+                autoReadText, completeTotalChars, factsText, postureText,
+                tabsText, docsText);
         int est = estTokens(prompt);
         if (est <= PROMPT_TOKEN_BUDGET) {
             return new FitResult(prompt, est, 0, true);
@@ -3008,7 +4695,7 @@ public class Agent {
         List<String> stubbed = stubReadChunksInHistory(history,
                 historyReadUrls);
         prompt = buildPrompt(goal, p, rendered, stubbed, autoReadText,
-                completeTotalChars, factsText);
+                completeTotalChars, factsText, postureText, tabsText, docsText);
         est = estTokens(prompt);
         if (est <= PROMPT_TOKEN_BUDGET) {
             return new FitResult(prompt, est, 1, true);
@@ -3024,7 +4711,7 @@ public class Agent {
                         : p.textPreview);
         slim.elements = p.elements;
         prompt = buildPrompt(goal, slim, rendered, stubbed, autoReadText,
-                completeTotalChars, factsText);
+                completeTotalChars, factsText, postureText, tabsText, docsText);
         est = estTokens(prompt);
         if (est <= PROMPT_TOKEN_BUDGET) {
             return new FitResult(prompt, est, 2, true);
@@ -3035,7 +4722,7 @@ public class Agent {
                 MAP_FIT_NAME_CHARS, MAP_FIT_HREF_CHARS,
                 Eyes.MAP_BUDGET_CHARS);
         prompt = buildPrompt(goal, slim, mapNow, stubbed, autoReadText,
-                completeTotalChars, factsText);
+                completeTotalChars, factsText, postureText, tabsText, docsText);
         est = estTokens(prompt);
         if (est <= PROMPT_TOKEN_BUDGET) {
             return new FitResult(prompt, est, 3, true);
@@ -3050,7 +4737,7 @@ public class Agent {
                             MAP_FIT_NAME_CHARS, MAP_FIT_HREF_CHARS,
                             MAP_FIT_CHARS);
             prompt = buildPrompt(goal, slim, mapNow, stubbed,
-                    autoReadText, completeTotalChars, factsText);
+                    autoReadText, completeTotalChars, factsText, postureText, tabsText, docsText);
             est = estTokens(prompt);
             if (est <= PROMPT_TOKEN_BUDGET) {
                 return new FitResult(prompt, est, 3, true);
@@ -3063,7 +4750,7 @@ public class Agent {
             noted = new ArrayList<String>(stubbed);
             noted.add(countsOnlyNote(autoReadText));
             prompt = buildPrompt(goal, slim, mapNow, noted, null,
-                    completeTotalChars, factsText);
+                    completeTotalChars, factsText, postureText, tabsText, docsText);
             est = estTokens(prompt);
             if (est <= PROMPT_TOKEN_BUDGET) {
                 return new FitResult(prompt, est, 4, true);
@@ -3080,7 +4767,8 @@ public class Agent {
             List<String> histNow = (noted != null) ? noted : stubbed;
             String autoNow = (noted != null) ? null : autoReadText;
             prompt = buildPrompt(goal, slim, mapNow, histNow, autoNow,
-                    completeTotalChars, factsStubText);
+                    completeTotalChars, factsStubText, postureText,
+                    tabsText, docsText);
             est = estTokens(prompt);
             if (est <= PROMPT_TOKEN_BUDGET) {
                 return new FitResult(prompt, est, 5, true, true);

@@ -926,6 +926,128 @@ public final class RelevanceGuard {
         return false;
     }
 
+    // ---------------- v3.10 (R2): the planner styles' guards ---
+
+    /** v3.10 (Careful): the verify-read correction cap, per
+     *  run. ONE explicit "read this page before finishing"
+     *  correction; after that dones execute exactly as before —
+     *  like the family's other caps, the guard buys a pointed
+     *  re-ask, never a trap. */
+    public static final int VERIFY_READ_CORRECTION_CAP = 1;
+
+    /**
+     * v3.10 (Everything Train R2 — the Careful style): the
+     * verify-read correction. Careful's one REAL guard change:
+     * a done proposed on a page that has not been read since
+     * the last navigation is corrected once — the planner is
+     * finishing from a page whose text it has never taken in
+     * (no read executed on it since arriving, no auto-read
+     * section shown for it, and it was not read to completion
+     * earlier this run — the loop assembles those three into
+     * pageRead, this rule judges only the proposal). A done on
+     * a read page, a non-done action, and every done after
+     * VERIFY_READ_CORRECTION_CAP corrections are untouched.
+     * Returns the reason, or null when the done may proceed.
+     */
+    public static String doneVerifyReadReason(GhAction action,
+                                              boolean pageRead,
+                                              int correctionsSoFar) {
+        if (action == null || !"done".equals(action.action)) {
+            return null;
+        }
+        if (pageRead) return null;
+        if (correctionsSoFar >= VERIFY_READ_CORRECTION_CAP) {
+            return null;
+        }
+        return "done corrected by verify guard (careful style): "
+                + "you have not read the page you are on - verify: "
+                + "read the current page before finishing, then "
+                + "answer {\"action\":\"done\"} from its text";
+    }
+
+    /** v3.10 (Thorough): the cross-check correction cap, per
+     *  run — the same count as the done-grounding guard's
+     *  (DONE_CORRECTION_CAP): two pointed re-asks, then the
+     *  guard falls silent. */
+    public static final int CROSS_CHECK_CORRECTION_CAP = 2;
+
+    /** v3.10: substrings that make a goal COMPARISON-shaped
+     *  (matched case-insensitively against the goal text):
+     *  the goal sets two or more candidates side by side and
+     *  asks for a verdict between them. Only then does the
+     *  Thorough cross-check ask for a second source. */
+    private static final String[] COMPARISON_CUES = {
+            "compare", "comparison", "cheaper", "cheapest",
+            "better deal", "best price", "best value", "versus",
+            " vs ", "vs.", "difference between", "which is",
+            "which one", "which has", "which offers",
+    };
+
+    /** True when the goal is comparison-shaped (see
+     *  COMPARISON_CUES). */
+    public static boolean isComparisonGoal(String goal) {
+        if (goal == null) return false;
+        String g = goal.toLowerCase();
+        for (int i = 0; i < COMPARISON_CUES.length; i++) {
+            if (g.contains(COMPARISON_CUES[i])) return true;
+        }
+        return false;
+    }
+
+    /** True when a text plainly states inability (the
+     *  INABILITY_PHRASES the grounding guard accepts as an
+     *  honest answer). Factored out for the cross-check: an
+     *  honest "could not find it" owes no second source. */
+    public static boolean statesInability(String text) {
+        if (text == null) return false;
+        String s = text.toLowerCase();
+        for (int i = 0; i < INABILITY_PHRASES.length; i++) {
+            if (s.contains(INABILITY_PHRASES[i])) return true;
+        }
+        return false;
+    }
+
+    /**
+     * v3.10 (Everything Train R2 — the Thorough style): the
+     * cross-check correction, the done-grounding guard's
+     * numeric demand extended. When the goal both requests
+     * numbers (goalRequestsNumbers — the grounding guard's
+     * own gate, so this rule lives strictly inside that
+     * guard's family) and is comparison-shaped, a done whose
+     * evidence comes from fewer than two DISTINCT read pages
+     * is corrected: a comparison verdict from one source is a
+     * claim, not a comparison. distinctReadPages counts the
+     * pages the run has actually read (planner reads and
+     * auto-reads alike — the loop keeps the set). A plain
+     * statement of inability is never corrected (it grounds
+     * as honesty under the grounding guard too). Falls silent
+     * after CROSS_CHECK_CORRECTION_CAP corrections. The loop
+     * consults this rule only after the grounding guard has
+     * passed the done, and only under the Thorough style.
+     * Returns the reason, or null when the done may proceed.
+     */
+    public static String crossCheckReason(GhAction action,
+                                          String goal,
+                                          int correctionsSoFar,
+                                          int distinctReadPages) {
+        if (action == null || !"done".equals(action.action)) {
+            return null;
+        }
+        if (correctionsSoFar >= CROSS_CHECK_CORRECTION_CAP) {
+            return null;
+        }
+        if (!goalRequestsNumbers(goal)) return null;
+        if (!isComparisonGoal(goal)) return null;
+        if (statesInability(action.summary)) return null;
+        if (distinctReadPages >= 2) return null;
+        return "done corrected by cross-check guard (thorough "
+                + "style): this goal compares, but your evidence "
+                + "comes from " + distinctReadPages + " read "
+                + "page(s) - cross-check: read a second source "
+                + "before finishing, then answer "
+                + "{\"action\":\"done\"} with both sides' values";
+    }
+
     /**
      * The number tokens of a text: maximal digit runs, with a
      * decimal point kept when it sits between digits ("43.5")
@@ -1068,5 +1190,81 @@ public final class RelevanceGuard {
             }
         }
         return out;
+    }
+
+    /** v3.12 (R4): the per-run cap on executed asks. Asking is the
+     *  safe move, but an uncapped ask channel is an interrogation
+     *  loop: two genuine clarifications per run, then the planner
+     *  decides from what it has (or answers done / stuck). The
+     *  budget is spent only by asks that EXECUTE — a corrected ask
+     *  consumes nothing, exactly like the other guards' corrected
+     *  proposals. */
+    public static final int ASK_CAP = 2;
+
+    /**
+     * v3.12 (R4): the ask correction. Pure, like every guard here;
+     * consulted by the loop for ASK proposals only, in the guard
+     * family before the governor. Returns a correction reason when
+     * the proposal must not execute:
+     *   - the run's ask budget (ASK_CAP) is already spent, or
+     *   - the immediately previous EXECUTED action was itself an
+     *     ask — two questions in a row with no intervening page
+     *     action are an interrogation loop, however the budget
+     *     stands.
+     * Non-ask actions and asks inside both limits return null.
+     * There is deliberately NO correction cap of its own: after
+     * the budget is spent every further ask corrects forever, and
+     * the run's step budget is the backstop, as with the other
+     * permanent corrections.
+     */
+    public static String askCorrectionReason(GhAction action,
+                                             int asksUsed,
+                                             String lastExecutedKind) {
+        if (action == null || !"ask".equals(action.action)) return null;
+        if (asksUsed >= ASK_CAP) {
+            return "ask limit reached: you have already asked "
+                    + asksUsed + " questions this run (the limit is "
+                    + ASK_CAP + "). Decide from what you have, or "
+                    + "answer done or stuck.";
+        }
+        if ("ask".equals(lastExecutedKind)) {
+            return "two questions in a row: ask one question, then "
+                    + "act on the page before asking another.";
+        }
+        return null;
+    }
+
+    /** v3.15 (R7): the hard cap on open browser tabs. Three tabs
+     *  is what the phone can hold beside the 1.5B model with the
+     *  inactive WebViews paused; a fourth open_tab is refused
+     *  with a legible correction (the guard family's shape), not
+     *  a crash — the planner closes or reuses a tab instead. The
+     *  execution path enforces the same cap (defense in depth),
+     *  so a proposal that somehow slips the guard still cannot
+     *  open a fourth tab. */
+    public static final int TAB_CAP = 3;
+
+    /**
+     * v3.15 (R7): the tab-limit correction. Pure, like every guard
+     * here; consulted by the loop for open_tab proposals only, in
+     * the guard family before the governor. Returns a correction
+     * reason when the run already has TAB_CAP tabs open; switch
+     * and close proposals, runs under the cap, and null actions
+     * return null. There is deliberately NO correction cap of its
+     * own: a planner that keeps proposing a fourth tab keeps
+     * being corrected, and the run's step budget is the backstop,
+     * as with the ask cap.
+     */
+    public static String tabLimitReason(GhAction action, int openTabs) {
+        if (action == null || !"open_tab".equals(action.action)) {
+            return null;
+        }
+        if (openTabs >= TAB_CAP) {
+            return "tab limit: " + TAB_CAP + " tabs are already open "
+                    + "(the limit is " + TAB_CAP + "). Switch to a tab "
+                    + "with switch_tab, or close one with close_tab, "
+                    + "instead of opening another.";
+        }
+        return null;
     }
 }

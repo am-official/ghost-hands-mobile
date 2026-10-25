@@ -70,6 +70,34 @@ import java.util.Map;
  * show it), and "assist" (a co-pilot pause: offered at a stuck
  * stop, then tapped — with provenance USER, because the tap was
  * the user's own hand, never the agent's — or declined).
+ * v3.12 adds two: "ask" (the planner asked the user a clarifying
+ * question — the question text; recorded by the loop BEFORE the
+ * question is put to the user, so record-before-execute holds
+ * for the new action exactly as for the old ones) and "answer"
+ * (the user's reply — the question it answers, the answer text
+ * and provenance USER, because the words are the user's own,
+ * never the agent's; an unanswered ask records no answer event —
+ * the run stops instead, and the stop record says why).
+ * v3.15 adds three: "tab_opened" (a browser tab came into being —
+ * the tab's 1-based number, its url and how it was opened: the
+ * planner's open_tab or the user's + chip), "tab_switched" (the
+ * active tab changed — the tab's number and its url) and
+ * "tab_closed" (a tab went away — the closed tab's number and
+ * url, and the number of the tab active after). Tab numbers in
+ * trails are the planner-facing 1-based numbers the tab roster
+ * shows; the loop records each tab event BEFORE the hands move,
+ * so record-before-execute holds for the tab actions exactly as
+ * for the old ones.
+ * v3.16 adds "page_watch" (R8): a page watch's CREATION,
+ * recorded in the live run's trail when one is running
+ * (stamped by:"user" — creation is the user's own tap, never
+ * a planner action, and no Governor ever judges it; idle
+ * creations have no trail to record in and live in the watch
+ * store itself). A page watch's check VERDICTS ride the
+ * existing "watch" event instead — goal_name carrying the
+ * watch's label, a url field and a page_watch flag added —
+ * so the answer card's watch banner reads them exactly as
+ * it reads a goal watch's, untouched.
  */
 public class Trail {
 
@@ -78,7 +106,9 @@ public class Trail {
             "result", "stop", "dialog", "download", "guard", "read",
             "recover", "race", "detour", "run_summary", "stale_stash",
             "fit", "run", "note", "watch", "route", "screenshot",
-            "assist",
+            "assist", "step_screenshot", "ask", "answer",
+            "tab_opened", "tab_switched", "tab_closed",
+            "page_watch",
     };
 
     private final File path;

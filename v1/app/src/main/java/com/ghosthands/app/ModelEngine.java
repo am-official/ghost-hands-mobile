@@ -23,8 +23,25 @@ package com.ghosthands.app;
  * it from the persisted user setting at launch and on every
  * toggle. The sampler chain is built per call natively, so a
  * toggle takes effect on the next call with no model reload.
+ *
+ * v3.6: two more carried values, on the same pattern. The CPU
+ * thread count (default 4, the standing value) is handed to the
+ * shim at load time only — the native context is created with
+ * it — so setThreads() never disturbs a loaded model; the new
+ * count applies at the NEXT load, and loadedThreads() reports
+ * the count the loaded context was actually created with (0
+ * when nothing is loaded). The prefix-cache switch (default ON,
+ * the v1.5 behaviour) is handed to the shim on every generate(),
+ * like the grammar flag: off means full prompt evaluation on
+ * every call, the pre-v1.5 behaviour, for A/B diagnosis.
  */
 public class ModelEngine {
+
+    /** The thread count every build through v3.5 hardcoded. */
+    public static final int DEFAULT_THREADS = 4;
+    /** The shim clamps the requested count into this range. */
+    public static final int MIN_THREADS = 1;
+    public static final int MAX_THREADS = 8;
 
     /** Immutable snapshot of one generate() call's native stats. */
     public static final class Stats {
@@ -73,6 +90,15 @@ public class ModelEngine {
      *  default, and the state before anyone sets it — means the
      *  shim never builds the grammar sampler. */
     private boolean grammarOn = false;
+    /** v3.6: the CPU thread count the NEXT load will ask the
+     *  shim for (clamped to [MIN_THREADS, MAX_THREADS] on the
+     *  way in), and the count the currently loaded context was
+     *  created with (0 = nothing loaded). */
+    private int threads = DEFAULT_THREADS;
+    private int loadedThreads = 0;
+    /** v3.6: the prefix-cache switch, as last set by the owner.
+     *  True — the default — is the v1.5 behaviour. */
+    private boolean prefixCacheOn = true;
 
     public synchronized boolean isLoaded() {
         return handle != 0;
@@ -92,13 +118,55 @@ public class ModelEngine {
             NativeBridge.freeModel(handle);
             handle = 0;
             loadedPath = null;
+            loadedThreads = 0;
         }
-        long h = NativeBridge.loadModel(path);
+        long h = NativeBridge.loadModel(path, threads);
         if (h == 0) return false;
         handle = h;
         loadedPath = path;
+        loadedThreads = threads;
         lastStats = ZERO;
         return true;
+    }
+
+    /** v3.6: set the CPU thread count for the NEXT load. A model
+     *  already loaded keeps the count it was created with — the
+     *  native context's threads are fixed at creation — so this
+     *  never reloads anything by itself. */
+    public synchronized void setThreads(int n) {
+        threads = clampThreads(n);
+    }
+
+    /** v3.6: the count the next load will request. */
+    public synchronized int threads() {
+        return threads;
+    }
+
+    /** v3.6: the count the loaded context was created with, or 0
+     *  when nothing is loaded — the value a run record can cite
+     *  as the threads the engine actually ran with. */
+    public synchronized int loadedThreads() {
+        return loadedThreads;
+    }
+
+    /** Clamp a requested thread count into the shim's range. */
+    public static int clampThreads(int n) {
+        if (n < MIN_THREADS) return MIN_THREADS;
+        if (n > MAX_THREADS) return MAX_THREADS;
+        return n;
+    }
+
+    /** v3.6: set the prefix-cache switch. Read by generate() on
+     *  every call, so a change applies from the next call onward;
+     *  no reload is involved. */
+    public synchronized void setPrefixCacheOn(boolean on) {
+        prefixCacheOn = on;
+    }
+
+    /** v3.6: the switch state generate() will hand the shim on
+     *  the next call. */
+    public synchronized boolean prefixCacheOn() {
+        return prefixCacheOn;
     }
 
     /** The most recent generate() call's stats (all zeros before the
@@ -152,7 +220,8 @@ public class ModelEngine {
         if (handle == 0) return "ERROR: no model loaded";
         String[] r;
         try {
-            r = NativeBridge.generate(handle, prompt, maxTokens, grammarOn);
+            r = NativeBridge.generate(handle, prompt, maxTokens,
+                    grammarOn, prefixCacheOn);
         } catch (Throwable th) {
             lastStats = ZERO;
             return "ERROR: generate threw " + th;
@@ -170,6 +239,7 @@ public class ModelEngine {
             NativeBridge.freeModel(handle);
             handle = 0;
             loadedPath = null;
+            loadedThreads = 0;
         }
         lastStats = ZERO;
     }

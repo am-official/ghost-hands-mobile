@@ -66,6 +66,13 @@ public class SavedGoals {
         public WatchCompare.Signature baseline = null;
         public String baselineSummary = "";
         public long baselineTsMs = 0;
+        // v3.6: the FILE NAME of the trail the baseline came
+        // from ("" when unknown — every baseline set before
+        // v3.6, whose producing run was never named). Trail
+        // retention (TrailPrune) protects a named baseline
+        // trail for as long as it is the reference; the name
+        // rides inside the baseline's own record below.
+        public String baselineTrailName = "";
 
         public SavedGoal() { }
 
@@ -90,9 +97,19 @@ public class SavedGoals {
          *  exactly as the card and list copy say. */
         public void setBaseline(WatchCompare.Signature sig,
                                 String summary, long tsMs) {
+            setBaseline(sig, summary, tsMs, "");
+        }
+
+        /** v3.6: as above, also naming the trail file the run
+         *  was recorded in, so retention can protect the
+         *  baseline's own run while it is the reference. */
+        public void setBaseline(WatchCompare.Signature sig,
+                                String summary, long tsMs,
+                                String trailName) {
             baseline = sig;
             baselineSummary = (summary == null) ? "" : summary;
             baselineTsMs = tsMs;
+            baselineTrailName = (trailName == null) ? "" : trailName;
         }
 
         /** Drop the baseline (unwatching does this: a watch that
@@ -101,6 +118,7 @@ public class SavedGoals {
             baseline = null;
             baselineSummary = "";
             baselineTsMs = 0;
+            baselineTrailName = "";
         }
 
         /** Carry the watch state onto a replacement record (a
@@ -112,6 +130,7 @@ public class SavedGoals {
             baseline = other.baseline;
             baselineSummary = other.baselineSummary;
             baselineTsMs = other.baselineTsMs;
+            baselineTrailName = other.baselineTrailName;
         }
     }
 
@@ -183,6 +202,12 @@ public class SavedGoals {
                 base.put("ts", Long.valueOf(g.baselineTsMs));
                 base.put("summary", g.baselineSummary);
                 base.put("sig", g.baseline.toJsonList());
+                // v3.6: the baseline's source trail, when known
+                // (older records simply lack the key).
+                if (g.baselineTrailName != null
+                        && g.baselineTrailName.length() > 0) {
+                    base.put("trail", g.baselineTrailName);
+                }
                 m.put("base", base);
             }
             out.add(m);
@@ -247,10 +272,12 @@ public class SavedGoals {
                 if (sig != null) {
                     Object ts = bm.get("ts");
                     Object sum = bm.get("summary");
+                    Object tr = bm.get("trail");
                     g.setBaseline(sig,
                             (sum instanceof String) ? (String) sum : "",
                             (ts instanceof Number)
-                                    ? ((Number) ts).longValue() : 0);
+                                    ? ((Number) ts).longValue() : 0,
+                            (tr instanceof String) ? (String) tr : "");
                 }
             }
             store.put(g);

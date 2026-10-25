@@ -3,6 +3,7 @@ package com.ghosthands.app;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -80,6 +81,26 @@ import java.util.Set;
  * Prompt economy matters on this hardware (~20 tok/s prompt
  * processing): the map is capped at 40 elements, names at 48 chars,
  * hrefs at 80, and the rendered map at ~1500 chars.
+ *
+ * v3.9 (R1 — the forms frontier): perception and the identity
+ * payload grow form state, all extracted by the same functions
+ * in MAP_JS and the heal's identOf (FORM_STATE_JS, shared
+ * verbatim so a perceived element and its execution-time
+ * identity read alike): which form an element belongs to
+ * (formIdx — the map renders a compact "form=N" tag), a
+ * checkbox/radio's checked state and value, and a select's
+ * option list with its selection. shapeMap collapses radio
+ * inputs sharing a form and a name into ONE group entry (an
+ * HTML radio group is one choice; its members stay
+ * individually resolvable in the identity scan and in
+ * window.__gh.all). The renderer shows the state the planner
+ * acts on: a select's options (capped, with a "+N more"
+ * accounting — a select is ONE map element however many
+ * options it carries, so options never eat the 40-element
+ * cap), a radio group's choices with the checked one marked,
+ * and a checkbox's [x]/[ ]. The matching hands are chooseJs /
+ * toggleJs (plus their heal scan variants), acting through
+ * the same identity discipline as tap/type.
  */
 public final class Eyes {
 
@@ -138,6 +159,22 @@ public final class Eyes {
     public static final int SETTLE_MAX_PROBES = 3;
     public static final int SETTLE_INTERVAL_MS = 600;
     public static final int SETTLE_FLAT_DELTA_CHARS = 32;
+    /** v3.9: the option harvest's raw cap — MAP_JS carries at
+     *  most this many of a select's options in the perception
+     *  payload (a pathological select cannot flood it); the
+     *  renderer shows fewer (next constant). */
+    public static final int MAX_RAW_OPTIONS = 40;
+    /** v3.9: how many of a select's option labels the rendered
+     *  map shows before the "+N more" accounting — the planner
+     *  chooses from what it can see, and 12 covers real forms
+     *  (sizes, cabins, counts) without spending the map budget
+     *  on a country list. */
+    public static final int MAX_SELECT_OPTIONS_SHOWN = 12;
+    /** v3.9: per-option label cap in the rendered opts/choices
+     *  list — display only; the choose/toggle match runs against
+     *  the live DOM's full text (with a unique-prefix fallback),
+     *  never against the truncated rendering. */
+    public static final int OPTION_LABEL_RENDER_CHARS = 24;
 
     /** A perception of the current page. */
     public static class Perception {
@@ -257,6 +294,12 @@ public final class Eyes {
                 line.append(" ph=").append(truncate(el.placeholder, 24));
             }
             line.append(labelSuffix);
+            // v3.9 (R1): the form tag and the form state (see
+            // formTagSuffix / formStateSuffix) — both empty for
+            // elements without form state, so pre-v3.9 maps render
+            // byte-identical.
+            line.append(formTagSuffix(el));
+            line.append(formStateSuffix(el));
             if (el.href != null && el.href.length() > 0) {
                 line.append(" href=").append(truncate(el.href, hrefCap));
             }
@@ -347,6 +390,102 @@ public final class Eyes {
         if (e == null || !"input".equals(e.tag)) return "";
         if (e.labelText == null || e.labelText.length() == 0) return "";
         return " [label: " + e.labelText + "]";
+    }
+
+    /**
+     * v3.9 (R1 — form grouping): the map-line tag that names an
+     * element's form — " form=2" — so the planner can see which
+     * fields belong to the same form without the map reordering
+     * (the map stays tiered; the tag carries the association).
+     * Numbering is the page's own: formIndex + 1, matching
+     * document.forms order. Empty for formless elements, so a
+     * page without forms renders exactly as before.
+     */
+    public static String formTagSuffix(ElementInfo e) {
+        if (e == null || e.formIndex < 0) return "";
+        return " form=" + (e.formIndex + 1);
+    }
+
+    /**
+     * v3.9 (R1 — form state): the map-line suffix that shows the
+     * state the new actions act on:
+     * - a select: its options, `opts="Economy|Business*|First"`
+     *   (the selected one *-marked), capped at
+     *   MAX_SELECT_OPTIONS_SHOWN labels with a "(+N more)"
+     *   accounting when the select carries more;
+     * - a radio group: its choices, `choices="Small|Medium*|
+     *   Large"`, the checked choice *-marked;
+     * - a lone checkbox/radio: its state, " [x]" / " [ ]".
+     * Labels are display-truncated at OPTION_LABEL_RENDER_CHARS;
+     * the choose/toggle match itself runs against the live
+     * DOM's full text. Empty for everything else.
+     */
+    public static String formStateSuffix(ElementInfo e) {
+        if (e == null) return "";
+        if (isSelect(e) && e.optionLabels != null
+                && !e.optionLabels.isEmpty()) {
+            int shown = Math.min(e.optionLabels.size(),
+                    MAX_SELECT_OPTIONS_SHOWN);
+            StringBuilder sb = new StringBuilder(" opts=\"");
+            for (int i = 0; i < shown; i++) {
+                if (i > 0) sb.append('|');
+                sb.append(truncate(e.optionLabels.get(i),
+                        OPTION_LABEL_RENDER_CHARS));
+                if (i == e.selectedOption) sb.append('*');
+            }
+            if (e.optionLabels.size() > shown) {
+                sb.append(" (+").append(e.optionLabels.size() - shown)
+                        .append(" more)");
+            }
+            return sb.append('"').toString();
+        }
+        if (e.radioGroup && e.choices != null && !e.choices.isEmpty()) {
+            StringBuilder sb = new StringBuilder(" choices=\"");
+            for (int i = 0; i < e.choices.size(); i++) {
+                if (i > 0) sb.append('|');
+                sb.append(truncate(e.choices.get(i).label,
+                        OPTION_LABEL_RENDER_CHARS));
+                if (e.choices.get(i).checked) sb.append('*');
+            }
+            return sb.append('"').toString();
+        }
+        if (isCheckable(e)) return e.checked ? " [x]" : " [ ]";
+        return "";
+    }
+
+    /** A <select> element (v3.9). */
+    public static boolean isSelect(ElementInfo e) {
+        return e != null && "select".equals(e.tag);
+    }
+
+    /** A radio input (v3.9). */
+    public static boolean isRadio(ElementInfo e) {
+        return e != null && "input".equals(e.tag)
+                && "radio".equals(e.type);
+    }
+
+    /**
+     * v3.9 (R1): a radio member's planner-facing choice label:
+     * its associated label text (the extractor's 48-char lab())
+     * first, the fuller explicit label second, then its value
+     * attribute (skipping the content-free default "on"), then
+     * its name. Used by shapeMap when it folds members into a
+     * group's choices — the same order the toggle hands' label
+     * resolution walks on the live DOM.
+     */
+    public static String radioChoiceLabel(ElementInfo member) {
+        if (member == null) return "";
+        if (member.label != null && member.label.length() > 0) {
+            return member.label;
+        }
+        if (member.labelText != null && member.labelText.length() > 0) {
+            return member.labelText;
+        }
+        if (member.domValue != null && member.domValue.length() > 0
+                && !"on".equals(member.domValue)) {
+            return member.domValue;
+        }
+        return member.name == null ? "" : member.name;
     }
 
     // ---------------- v1.2 map shaping (Java, host-testable) ---------
@@ -456,6 +595,12 @@ public final class Eyes {
         }
         sorted = deduped;
 
+        // v3.9 (R1): radio grouping — collapse each radio group
+        // (same form, same name attribute) into its first member
+        // BEFORE the checkables cap, so a group spends ONE cap
+        // slot however many choices it has. See groupRadios.
+        sorted = groupRadios(sorted);
+
         // Checkbox/radio cap: keep only the first few (in tier/DOM
         // order); the rest are dropped from the map entirely.
         List<ElementInfo> capped = new ArrayList<ElementInfo>();
@@ -493,6 +638,69 @@ public final class Eyes {
             out.add(e);
         }
         return out;
+    }
+
+    /**
+     * v3.9 (R1 — radio grouping): fold radio inputs that share a
+     * form (formIndex; formless radios share the document) and a
+     * name attribute into ONE entry — the HTML semantics of a
+     * radio group is a single choice among its members, and the
+     * map should present it that way: one entry, its choices
+     * carried on ElementInfo.choices, instead of one cap-eating
+     * entry per button. Rules:
+     * - Only radios with a NON-EMPTY name group. An unnamed radio
+     *   is a group of one in HTML too (it can never be unselected
+     *   by a sibling), so it stays a plain entry.
+     * - The group's entry IS its first member (in shaped order):
+     *   its position, its domIndex and its extracted fields —
+     *   the identity anchor the heal path compares against (the
+     *   identity scan still enumerates members individually, and
+     *   identityMatches judges a member by name+type, which the
+     *   head shares with every member). Only when a second
+     *   member folds in does the entry become a group
+     *   (radioGroup, choices filled, head first).
+     * - The head's checked reads as the group's: true when any
+     *   member is checked; each choice carries its own state.
+     * Members keep their own domIndex inside their Choice, so
+     * every radio stays individually addressable in
+     * window.__gh.all even though the map shows it once.
+     */
+    public static List<ElementInfo> groupRadios(List<ElementInfo> els) {
+        List<ElementInfo> out = new ArrayList<ElementInfo>();
+        Map<String, ElementInfo> heads =
+                new LinkedHashMap<String, ElementInfo>();
+        for (ElementInfo e : els) {
+            if (!isRadio(e) || e.domName == null
+                    || e.domName.length() == 0) {
+                out.add(e);
+                continue;
+            }
+            String key = e.formIndex + "\n" + e.domName;
+            ElementInfo head = heads.get(key);
+            if (head == null) {
+                heads.put(key, e);
+                out.add(e);
+                continue;
+            }
+            if (!head.radioGroup) {
+                head.radioGroup = true;
+                head.choices = new ArrayList<ElementInfo.Choice>();
+                head.choices.add(choiceOf(head));
+            }
+            head.choices.add(choiceOf(e));
+            if (e.checked) head.checked = true;
+        }
+        return out;
+    }
+
+    /** One radio member -> its group Choice (v3.9). */
+    private static ElementInfo.Choice choiceOf(ElementInfo member) {
+        ElementInfo.Choice c = new ElementInfo.Choice();
+        c.label = radioChoiceLabel(member);
+        c.value = member.domValue == null ? "" : member.domValue;
+        c.checked = member.checked;
+        c.domIndex = member.domIndex;
+        return c;
     }
 
     /**
@@ -711,6 +919,35 @@ public final class Eyes {
             + "return ghClean(parts.join('')).slice(0,"
             + TEXT_PREVIEW_CHARS + ");}";
 
+    /** JS: the v3.9 form-state extraction, shared verbatim by
+     *  MAP_JS and the heal's identOf (HEAL_FUNCS_JS) so a
+     *  perceived element and the identity read at execution time
+     *  carry the same fields: fidx (the enclosing form's index
+     *  in document.forms, -1 formless), chkOf (a checkable's
+     *  checked state, -1 for non-checkables), valOf (a
+     *  checkable's value attribute — checkables ONLY, so typed
+     *  text never rides the payload), optsOf (a select's option
+     *  list: text, value, selected — capped at MAX_RAW_OPTIONS;
+     *  null for non-selects). */
+    private static final String FORM_STATE_JS =
+            "function fidx(e){if(!e.form)return -1;"
+            + "var fs=document.forms;"
+            + "for(var i=0;i<fs.length;i++){if(fs[i]===e.form)return i;}"
+            + "return -1;}"
+            + "function chkOf(e){var t=(e.type||'').toLowerCase();"
+            + "if(t==='checkbox'||t==='radio')return e.checked?1:0;"
+            + "return -1;}"
+            + "function valOf(e){var t=(e.type||'').toLowerCase();"
+            + "if(t==='checkbox'||t==='radio')"
+            + "return (''+(e.value||'')).slice(0,48);return '';}"
+            + "function optsOf(e){if(e.tagName!=='SELECT')return null;"
+            + "var out=[];"
+            + "for(var i=0;i<e.options.length&&out.length<"
+            + MAX_RAW_OPTIONS + ";i++){var o=e.options[i];"
+            + "out.push({t:txt(o).slice(0,48),"
+            + "v:(''+(o.value||'')).slice(0,48),s:o.selected?1:0});}"
+            + "return out;}";
+
     /** JS: enumerate interactives in DOM order, stash the nodes on
      *  window.__gh.all, return a JSON string. v1.2: NO tiering, NO
      *  capping in the script — the raw candidate list goes to Java
@@ -762,6 +999,7 @@ public final class Eyes {
             + "if(!ok)continue;"
             + "var s=(n.nodeValue||'').trim();if(s)parts.push(s);}"
             + "return parts.join(' ').replace(/\\s+/g,' ').slice(0,200);}"
+            + FORM_STATE_JS
             + POINTER_HARVEST_JS
             + READ_SENSE_JS
             + "function ptxt(){var r=document.querySelector('main')||document.querySelector('article')||document.body;"
@@ -778,7 +1016,9 @@ public final class Eyes {
             + "formText:ftxt(el.form),"
             + "labelText:labx(el),"
             + "placeholder:(el.placeholder||''),domId:(el.id||''),"
-            + "domName:(el.getAttribute('name')||''),ptr:0});}"
+            + "domName:(el.getAttribute('name')||''),ptr:0,"
+            + "formIdx:fidx(el),chk:chkOf(el),val:valOf(el),"
+            + "opts:optsOf(el)});}"
             + "var extra=ptrHarvest(window.__gh.all);"
             + "for(var j=0;j<extra.length&&out.length<" + MAX_RAW_CANDIDATES + ";j++){var el=extra[j];"
             + "window.__gh.all.push(el);"
@@ -788,7 +1028,9 @@ public final class Eyes {
             + "formText:ftxt(el.form),"
             + "labelText:labx(el),"
             + "placeholder:(el.placeholder||''),domId:(el.id||''),"
-            + "domName:(el.getAttribute('name')||''),ptr:1});}"
+            + "domName:(el.getAttribute('name')||''),ptr:1,"
+            + "formIdx:fidx(el),chk:chkOf(el),val:valOf(el),"
+            + "opts:optsOf(el)});}"
             // v2.8: a light candidate pass (metrics only) rides
             // along so parseMap can offer the preview preference;
             // it stashes window.__gh.readCands, which previewAtJs
@@ -894,6 +1136,35 @@ public final class Eyes {
         el.placeholder = str(em.get("placeholder"));
         el.domId = str(em.get("domId"));
         el.domName = str(em.get("domName"));
+        // v3.9 (R1): the form-state fields (absent in pre-v3.9
+        // payloads — the defaults then stand: formless, unchecked,
+        // no options).
+        Object fi = em.get("formIdx");
+        if (fi instanceof Number) {
+            el.formIndex = ((Number) fi).intValue();
+        }
+        Object chk = em.get("chk");
+        el.checked = (chk instanceof Number)
+                && ((Number) chk).intValue() == 1;
+        el.domValue = str(em.get("val"));
+        Object opts = em.get("opts");
+        if (opts instanceof List) {
+            el.optionLabels = new ArrayList<String>();
+            el.optionValues = new ArrayList<String>();
+            el.selectedOption = -1;
+            for (Object o : (List<?>) opts) {
+                if (!(o instanceof Map)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> om = (Map<String, Object>) o;
+                el.optionLabels.add(str(om.get("t")));
+                el.optionValues.add(str(om.get("v")));
+                Object sel = om.get("s");
+                if (el.selectedOption < 0 && sel instanceof Number
+                        && ((Number) sel).intValue() != 0) {
+                    el.selectedOption = el.optionLabels.size() - 1;
+                }
+            }
+        }
         return el;
     }
 
@@ -976,13 +1247,16 @@ public final class Eyes {
             + "if(!ok)continue;"
             + "var s=(n.nodeValue||'').trim();if(s)parts.push(s);}"
             + "return parts.join(' ').replace(/\\s+/g,' ').slice(0,200);}"
+            + FORM_STATE_JS
             + "function identOf(e){return {tag:e.tagName.toLowerCase(),role:role(e),name:nm(e),"
             + "type:(e.type||''),href:(e.href||''),label:lab(e),"
             + "formAction:(e.form&&e.form.action)?e.form.action:'',"
             + "formText:ftxt(e.form),"
             + "labelText:labx(e),"
             + "placeholder:(e.placeholder||''),domId:(e.id||''),"
-            + "domName:(e.getAttribute('name')||'')}}"
+            + "domName:(e.getAttribute('name')||''),"
+            + "formIdx:fidx(e),chk:chkOf(e),val:valOf(e),"
+            + "opts:optsOf(e)}}"
             + POINTER_HARVEST_JS
             + "function collectNodes(){"
             + "var nodes=document.querySelectorAll(\"a,button,input,select,textarea,[role='button'],[role='link'],[onclick]\");"
@@ -1907,6 +2181,157 @@ public final class Eyes {
                 + "e.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "e.dispatchEvent(new Event('change',{bubbles:true}));"
                 + "return 'ok: acted';})()";
+    }
+
+    // ---------------- v3.9 (R1): choose / toggle hands -----------
+    //
+    // The two form actions typeJs could only half-serve: type on
+    // a select picked an option as a side effect of typing, and a
+    // checkbox/radio fell to a plain tap with no state in the
+    // result. choose and toggle are first-class: choose picks a
+    // select's option BY ITS VISIBLE LABEL (exact text, then the
+    // option's value, then a unique label prefix — the renderer's
+    // 24-char display cap can truncate a long label, but the
+    // match runs here, against the live DOM's full text);
+    // toggle flips a checkbox (reporting its new state) or
+    // selects a radio — the named choice within the element's
+    // group when the action carries a text, the element itself
+    // when it does not. Both act through the same identity
+    // discipline as tap/type: the stash variants below address
+    // window.__gh.els, the scan variants address a fresh
+    // identity scan's node (a radio group's head stashes its
+    // first member, and the group resolves from whichever member
+    // the scan re-found). Event behaviour matches the hands'
+    // standing practice: choose dispatches input + change (the
+    // React-friendly pair typeJs fires), and toggle uses the
+    // node's own click(), which natively toggles and fires.
+
+    /** JS helpers shared by the four choose/toggle builders:
+     *  option matching, radio-group resolution and the two acts.
+     *  Pure DOM work — no window.__gh access; the builders supply
+     *  the node. */
+    private static final String FORM_ACT_JS =
+            "function ghOptText(e,i){"
+            + "return ((e.options[i].text||'').trim()"
+            + ".replace(/\\s+/g,' '));}"
+            + "function ghPickOption(e,text){var t=(''+text).trim();"
+            + "for(var i=0;i<e.options.length;i++){"
+            + "if(ghOptText(e,i)===t)return i;}"
+            + "for(var i=0;i<e.options.length;i++){"
+            + "if((''+e.options[i].value)===t)return i;}"
+            + "var f=-1;"
+            + "for(var i=0;i<e.options.length;i++){"
+            + "var o=ghOptText(e,i);"
+            + "if(o.length>t.length&&o.indexOf(t)===0){"
+            + "if(f>=0)return -1;f=i;}}"
+            + "return f;}"
+            + "function ghChoose(e,n,text){"
+            + "if(!e)return 'error: element '+n+' not on page';"
+            + "if(e.tagName!=='SELECT')"
+            + "return 'error: element '+n+' is not a select';"
+            + "e.scrollIntoView({block:'center'});e.focus();"
+            + "var i=ghPickOption(e,text);"
+            + "if(i<0)return 'error: no option \"'+text"
+            + "+'\" in select #'+n;"
+            + "e.selectedIndex=i;"
+            + "e.dispatchEvent(new Event('input',{bubbles:true}));"
+            + "e.dispatchEvent(new Event('change',{bubbles:true}));"
+            + "return 'ok: chose \"'+ghOptText(e,i)+'\" in #'+n;}"
+            + "function ghEscId(s){"
+            + "return (window.CSS&&CSS.escape)?CSS.escape(s)"
+            + ":s.replace(/\"/g,'\\\\\"');}"
+            + "function ghRadioLabel(r){var id=r.id;"
+            + "if(id){var l=document.querySelector("
+            + "'label[for=\"'+ghEscId(id)+'\"]');"
+            + "if(l)return ((l.innerText||l.textContent||'')"
+            + ".trim().replace(/\\s+/g,' '));}"
+            + "if(r.closest){var w=r.closest('label');"
+            + "if(w)return ((w.innerText||w.textContent||'')"
+            + ".trim().replace(/\\s+/g,' '));}"
+            + "return ''+r.value;}"
+            + "function ghRadioGroup(e){var out=[];"
+            + "if(e.form){var els=e.form.elements;"
+            + "for(var i=0;i<els.length;i++){var r=els[i];"
+            + "if((r.type||'')==='radio'&&r.name===e.name)"
+            + "out.push(r);}}"
+            + "else{var all=document.querySelectorAll("
+            + "'input[type=\"radio\"]');"
+            + "for(var i=0;i<all.length;i++){"
+            + "if(all[i].name===e.name)out.push(all[i]);}}"
+            + "return out;}"
+            + "function ghFindRadio(grp,text){var t=(''+text).trim();"
+            + "for(var i=0;i<grp.length;i++){"
+            + "if(ghRadioLabel(grp[i])===t)return grp[i];}"
+            + "for(var i=0;i<grp.length;i++){"
+            + "if((''+grp[i].value)===t)return grp[i];}"
+            + "var f=null;"
+            + "for(var i=0;i<grp.length;i++){"
+            + "var o=ghRadioLabel(grp[i]);"
+            + "if(o.length>t.length&&o.indexOf(t)===0){"
+            + "if(f)return null;f=grp[i];}}"
+            + "return f;}"
+            + "function ghToggle(e,n,text){"
+            + "if(!e)return 'error: element '+n+' not on page';"
+            + "var t=(e.type||'').toLowerCase();"
+            + "if(t==='checkbox'){"
+            + "e.scrollIntoView({block:'center'});e.click();"
+            + "return 'ok: toggled #'+n+' ('"
+            + "+(e.checked?'on':'off')+')';}"
+            + "if(t==='radio'){var target=e;"
+            + "if(text){target=ghFindRadio(ghRadioGroup(e),text);"
+            + "if(!target)return 'error: no radio choice \"'+text"
+            + "+'\" for #'+n;}"
+            + "target.scrollIntoView({block:'center'});"
+            + "target.click();"
+            + "return 'ok: selected \"'+ghRadioLabel(target)"
+            + "+'\" in #'+n;}"
+            + "return 'error: element '+n"
+            + "+' is not a checkbox or radio';}";
+
+    /** JS: choose an option of the select stashed at slot n, by
+     *  its visible label (value / unique-prefix fallbacks — see
+     *  FORM_ACT_JS). */
+    public static String chooseJs(int n, String text) {
+        return "(function(){" + FORM_ACT_JS
+                + "var e=window.__gh&&window.__gh.els[" + (n - 1) + "];"
+                + "return ghChoose(e," + n + ","
+                + Json.quote(text == null ? "" : text) + ");})()";
+    }
+
+    /** JS: choose on the node at scanIndex in a fresh identity
+     *  scan (the heal variant of chooseJs; error strings keep
+     *  the planner's number n; successes return 'ok: acted' and
+     *  the caller composes the healed string, as tapScanJs does —
+     *  except a choose's success text carries the option name
+     *  the planner needs to hear, so ghChoose's own 'ok:' string
+     *  passes through and the caller detects the heal by the
+     *  decision, not the string shape). */
+    public static String chooseScanJs(int scanIndex, int n,
+                                      String text) {
+        return "(function(){" + HEAL_FUNCS_JS + FORM_ACT_JS
+                + "var e=collectNodes()[" + scanIndex + "];"
+                + "return ghChoose(e," + n + ","
+                + Json.quote(text == null ? "" : text) + ");})()";
+    }
+
+    /** JS: toggle the checkbox stashed at slot n, or select a
+     *  radio choice within its group (text names the choice;
+     *  null/empty text selects the stashed radio itself). */
+    public static String toggleJs(int n, String text) {
+        return "(function(){" + FORM_ACT_JS
+                + "var e=window.__gh&&window.__gh.els[" + (n - 1) + "];"
+                + "return ghToggle(e," + n + ","
+                + Json.quote(text == null ? "" : text) + ");})()";
+    }
+
+    /** JS: toggle on the node at scanIndex in a fresh identity
+     *  scan (the heal variant of toggleJs). */
+    public static String toggleScanJs(int scanIndex, int n,
+                                      String text) {
+        return "(function(){" + HEAL_FUNCS_JS + FORM_ACT_JS
+                + "var e=collectNodes()[" + scanIndex + "];"
+                + "return ghToggle(e," + n + ","
+                + Json.quote(text == null ? "" : text) + ");})()";
     }
 
     // ---------------- v3.3: the user's own hand ------------------

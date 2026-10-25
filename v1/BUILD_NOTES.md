@@ -5,6 +5,2214 @@ entirely on the phone. Foundation reused from the on-device proof
 (~/workspace/ghost-hands-mobile/BUILD_NOTES.md): same pinned llama.cpp
 b11382 Android build, same JNI shim design, same model download flow.
 
+## v3.16.0 (Oct 25, 2026) — R8: Downloads, Documents, Page Watch
+
+Everything Train R8 of 13 (ROADMAP_EVERYTHING.md). Three
+capabilities land together: a page can hand the app a file
+without the file slipping past the Governor; a goal can read
+a local document the way it reads a page; and any page can be
+watched the way watched goals are watched. versionCode 38.
+
+PART A — GOVERNED DOWNLOADS. The WebView download listener
+(v1 hooked it to feed a line and stop; the fetch itself was
+the browser's problem then) now routes every offer through
+Downloads.decide, a Governor.evaluate mirror that judges in
+the Governor's own order: the seatbelt deny patterns over
+the filename and the source URL (with the Governor's %20 /
+separator folding), then the domain rules over the source
+host, then the pack's outcome for the download's CLASS.
+Downloads are WRITE class; a download whose filename or
+MIME is executable- or archive-shaped is CONSEQUENTIAL —
+the tested lists are apk/exe/msi/dmg/pkg/deb/rpm/com/scr/
+bat/cmd/ps1/sh/jar/appimage/bin/run and the archive family
+zip/tar/gz/tgz/bz2/xz/7z/rar/iso/img plus their MIME types
+(application/vnd.android.package-archive, x-msdownload,
+zip, x-7z-compressed, ...). The approval panel names the
+file, its size when known, its type in plain words ("an app
+or program file", "an archive") and its host, through the
+same full-screen panel goals use; silence is denial (the
+pack's approval timeout, no saved-grant offers, no remember
+checkbox — a download grant is not a site grant). The pack
+in force is the running run's while a run is live, else the
+Settings default pack.
+
+TRANSPORTS, and their limits stated plainly. http(s)
+downloads are fetched by the app itself (HttpURLConnection,
+the page's cookies, the listener's user agent) so the bytes
+that land are the bytes that were judged; a non-2xx answer
+fails, and an HTML answer to a non-HTML offer fails honestly
+as what it usually is — a login wall. data: URLs decode in
+place (base64 or percent-escaped, hand-rolled decoder, no
+android.util.Base64 so the path is host-testable). blob:
+URLs ride a token-gated JS bridge: the page's own script
+fetches the blob and hands it over in 192 KB base64 chunks
+through a one-job bridge object with a random token and a
+120-second expiry; a second live offer while one is in
+flight is refused, and a job the page never completes is
+trail-recorded as failed. Other schemes are refused and
+recorded. EVERY download — allowed, approved, denied,
+failed — lands in the run's trail (or a standing
+downloads-trail.jsonl in the store directory when no run is
+live) as a "download" event with filename, byte size, MIME,
+class, outcome and approval state.
+
+THE STORE. Files land in an app-private downloads
+directory under a store index in prefs. Retention follows
+the house discipline with stated caps: a single download
+over 25 MB is refused before it is fetched; the store keeps
+at most 30 files and 100 MB total, evicting oldest first,
+files and entries together. The History screen's downloads
+section lists each file (name, size, type, date, origin —
+downloaded or picked) with Open / Share / delete. Open and
+Share hand the file out through DlProvider, a NEW MANIFEST
+SURFACE declared as plainly as v3.14's service: a
+ContentProvider that serves ONLY the downloads directory,
+read-only, not exported, answering solely through per-URI
+read grants the app itself issues (a file:// URI is refused
+by the platform at this target SDK, and androidx's
+FileProvider is outside the framework-only rule). It adds
+NO uses-permission; the manifest's permission set is
+byte-identical to v3.15's (INTERNET, ACCESS_NETWORK_STATE,
+VIBRATE, RECORD_AUDIO) — verified by aapt2 diff against the
+preserved v3.15 APK. The Downloads section's note also
+carries Part B's limit: "PDFs: cannot read text from PDFs
+yet."
+
+PART B — READ DOCUMENTS. A "Read a file…" chip (History,
+beside the downloads list) opens the system file picker
+(SAF, ACTION_OPEN_DOCUMENT — no new permission); the picked
+file is COPIED into the downloads store at pick time, so a
+run never depends on a SAF grant that may lapse. Downloads
+already in the store are equally pickable by virtue of being
+there. DocText extracts readable text for the tested list —
+txt, md, csv, html, log, json by extension or MIME — with
+the page reader's discipline: HTML is stripped by a small
+honest stripper (script/style/noscript dropped whole, block
+tags become lines, the five named entities plus numeric
+references decode), everything is capped at the page read's
+own total cap (60,000 chars). PDF: this release has no PDF
+text engine, and the app says so rather than failing
+weirdly — the refusal sentence is "cannot read text from
+PDFs yet", shown at pick time, in the list row, and as the
+answer when a goal asks for a PDF by name.
+
+THE PLANNER SURFACE. A read_file action naming a document
+from the run's available list. The prompt lists readable
+documents by name under the tab roster ("Files: prices.csv
+— read one with read_file, naming it.", at most 8 names +
+"+N more", names capped at 48 chars) and lists nothing when
+the store holds nothing readable — prompts without
+documents are byte-identical to v3.15's (harness-pinned).
+Reads are served in chunks through Eyes.formatReadChunk,
+the page read's own framing, with a per-document cursor
+that wraps at the end like the page's; the loop treats
+read_file with read's history discipline (read cap, the
+one-time note hint) but NOT its page bookkeeping (a
+document's facts ground a done only through the scratchpad —
+the R7 cross-tab rule applied to files). GOVERNOR CLASS:
+READONLY, registered in classify()'s early-return list
+BEFORE the keyword pass — reading a local file changes
+nothing, and a document named "delete-taxes.csv" can never
+be upgraded by its name (harness-pinned under every pack,
+including readonly, so scheduled checks can read documents
+outright). PlannerParse fails closed on a missing, blank or
+non-string name. The contract gained the read_file shape
+inside the same budget (CONTRACT_TEXT est 291, block est
+329, inside the 292/332 pins; trims ledgered in the
+CONTRACT_TEXT header comment: the selects sentence, the
+"Question goal" opener shortened to "Question:", "Title
+match:" to "Title:", and one worked example's "Text:" label
+— three earlier trims were tried, hit real pins, and were
+reverted; the ledger says which).
+
+PART C — WATCH THIS PAGE. A "Watch" segment in the URL-bar
+row, and a "Watch page" chip on answer cards that carry a
+source URL, create a page watch: the URL plus an evidence
+signature of the page's current readable text, taken with
+WatchCompare's own signature discipline (distinct numeric
+values with labels of at most 3 words) over
+Eyes-extracted text. CLASSIFICATION CHOICE, stated and
+pinned: creation is the USER's own act on the user's own
+state — like saving a goal, it is not a planner action and
+the Governor never sees it; the creation record is a new
+trail event type "page_watch" (registered in
+Trail.EVENT_TYPES before use, per the standing rule)
+stamped by:"user", and creation is allowed during a run
+(it writes only app state; the run's page is read, never
+disturbed). Watches live on the Goals screen in a PAGE
+WATCHES section, in the watched goals' management family,
+and reuse the ENTIRE check machinery: the check is a
+generated readonly goal ("Open <url>, read the page text,
+and report the main facts and numbers you find, briefly.")
+run under the schedule-launch pinning (readonly pack,
+RunMarker suppressed, tab 1); the verdict is
+WatchCompare.compare of the freshly extracted page text
+against the baseline — CHANGED / NO_CHANGE with the
+goal watches' diff lines; baselines advance ONLY on
+completed checks (a check whose run ended elsewhere, or
+whose final page does not match the watched URL
+scheme/host/path, or whose text is empty, records NOT_DONE
+and moves nothing); the quiet-hours and notification rules
+are the goal watches' own (changed posts and vibrates
+ungated, unchanged is silent, a changed verdict inside
+quiet hours is recorded only); the finish beep is deferred
+to the verdict and silenced by the same rules. Scheduling
+is the goal checks' machinery verbatim: a daily time per
+watch, alarms through the same receiver (the alarm name
+carries a "page:" prefix in the shared extra), re-judged at
+fire time, notify-and-launch — nothing browses unattended.
+A watch's row shows its label ("Page: host/path"), its
+schedule, and its last verdict with its time.
+
+THE SHIM INCIDENT, recorded because it happened on this
+release's watch. During development, the host suite was
+invoked with the shim's path as its output-directory
+argument; the script's rm -rf of the outdir destroyed
+v1/native/shim/ghhands.c, the JNI shim source (grammar
+through v3.16 included). The file shipped in this APK is a
+RECONSTRUCTION, verified four ways, and the reconstruction
+is part of this release's record: (1) the base text is the
+v3.4.0 shim fetched back from the product's own GitHub repo
+(blob a1a66fc8, 17,943 bytes — the last pushed state);
+(2) the only post-v3.4 glue deltas are the documented ones —
+v3.6's loadModel thread parameter (clamped [1, 8]) and
+generate() prefix-cache switch, plus v3.11's one-line
+sampler fix (the redundant explicit accept deleted; the
+file stays free of the call, GovernorTest-pinned) — each
+cross-checked against the v3.11 grammar hunt's host object
+(ghhands-fixed.o, unstripped with DWARF: identical function
+inventory, identical GhHandle fields, identical parameter
+names, identical error strings) and against NativeBridge's
+declared signatures; (3) the grammar is the preserved
+grammar-v316.txt extraction, re-encoded as C literals —
+extract_grammar.py run on the reconstruction reproduces
+grammar-v316.txt BYTE FOR BYTE, and the parity oracle
+re-run against that extraction scores 57 passed, 0 failed;
+(4) the fake-JNI host harness rebuilt around the
+reconstruction (harness-recon, ASan+UBSan, the pinned
+llama) ran the hunt's own scenarios: Q5_K_M grammar ON +
+cache ON — all 8 calls returned, grammar_flag 1 on every
+call, prefix reuse 385 tokens/call, outputs valid action
+objects; Q4_K_M grammar ON + cache ON — all 12 calls
+returned the same way. [harness results as run; see
+grammar-lab recon logs.] The function's source ORDER also
+follows the v3.11 object (helpers, loadModel, freeModel,
+generate). What the reconstruction cannot claim: the
+original's comments are rewritten where they were not
+recoverable (the grammar and header blocks document the
+current contract in current words), and byte-identity with
+the lost file is neither claimed nor needed — the gates
+above are behavioural. The recovery staging is kept at
+~/workspace/ghost-hands-mobile/scratch/recovery/.
+
+GATES. Host suite: 1,614 → 1,738 passed, 0 failed (+124:
+download classification table incl. every consequential
+upgrade and the seatbelt/domain deny paths, describe/store/
+data-URL tables, extraction per type incl. the PDF refusal,
+read_file parse + Governor rows incl. the un-upgradeable
+name, the documents roster + prompt pins, the page-watch
+signature/verdict lifecycle incl. baseline immobility on
+not-done, trail stamps, and the manifest/provider/source
+pins). ONE existing check changed — the standing version
+pin moves to 3.16.0 / code 38 — disclosed here as every
+release discloses it. Grammar parity oracle: 57/57 (above).
+./build-apk.sh green; signer cert de6969f0…25cd71b (the
+preserved keystore); badging 3.16.0 / code 38; the full
+arm64 library set (llama, ggml, ggml-cpu, ggml-base, omp,
+ghhands); uses-permissions identical to v3.15 (diffed);
+icon retained. APK 3,270,999 bytes, sha256
+143a5ced9eba866797d48804e7bebb83e13d205dcdd058301cfda140eba57187,
+delivered at ~/workspace/your_files/ghost-hands.apk with
+the remote-storage link in
+~/workspace/ghost-hands-mobile/ghost-hands-v316-upload.json
+(expires Oct 27, 2026). Grammar default remains OFF. The
+a11y service remains inert. Still Ryan's: install + the
+device pass (a real page download incl. an archive ask, a
+picked document read by a goal, a page watch's baseline +
+a later changed check), as ever.
+
+## v3.15.0 (Oct 25, 2026) — R7: Multi-Tab
+
+Everything Train R7 of 13 (ROADMAP_EVERYTHING.md). The agent
+(and Ryan) can now work with up to THREE tabs at once: compare
+two sources side by side, keep a results page open while
+reading an article, hold a form in one tab and its
+instructions in another. versionCode 37.
+
+THE TAB MODEL. The Agent screen's stage is now a small tab
+strip above a FrameLayout host that holds one WebView per
+tab. The Activity's `webView` field always points at the
+ACTIVE tab's view, so everything built since v1.0 — callJs,
+the URL bar, screenshots, teach, grants, WebHands — follows
+the active tab unchanged; tab machinery (createTabView /
+activateTab / openTabInternal / closeTabInternal) moves the
+field. Each tab keeps its own current URL, scroll and page
+state (the view itself holds them), and on the agent side
+its own slice of loop state (below). MEMORY POLICY, stated
+plainly: at most 3 WebViews exist beside the 1.5B model;
+inactive views are GONE and onPause()'d, the active one is
+VISIBLE and resumed; closing a tab destroy()s its view. A
+paused hidden WebView runs no JS and renders nothing, which
+is what bounds the cost; nothing is serialized or restored
+— a tab's page is whatever its view still holds.
+
+THE PLANNER SURFACE. Three new actions: open_tab (optional
+url), switch_tab (tab), close_tab (tab) — tabs are 1-based
+in actions, the roster and the trail, 0-based only at the
+Hands seam. PlannerParse is fail-closed: a missing, zero or
+non-numeric tab is refused outright; open_tab's url follows
+the toggle precedent (present-but-blank reads as absent;
+non-string fails closed); the tab integer goes through the
+same asInt as el/ms (a quoted "2" parses — the parser's
+standing leniency; the grammar never emits one). The prompt
+gains a one-line roster under the Page line — "Tabs: 1
+river.test, 2 example.test (active)" — present only when
+2+ tabs are open; with fewer, every prompt is byte-identical
+to v3.14's (harness-pinned through buildPrompt and
+fitPrompt). The contract names the three shapes and one
+rule — "Tabs: 3 max; facts in-tab." — inside the SAME
+budget: CONTRACT_TEXT est 290 / CONTRACT_BLOCK est 330,
+exactly v3.12's measures (trims: the "Reply ONE JSON" tail,
+the "Use map numbers" line, and compressed phrasing in the
+selects / rules / auto-read / title sentences; every pinned
+fragment, including both full operative clauses, kept
+verbatim — the trim ledger is in the CONTRACT_TEXT header
+comment).
+
+GRAMMAR. The three shapes joined GH_ACTION_GRAMMAR; the
+parity oracle grew 11 rows (bare/url/pretty open_tab,
+switch, big-number switch, close — complete; empty-url
+open_tab, missing/zero tab — not complete) and scores
+51 passed, 0 failed (grammar-lab: oracle-v315 against
+grammar-v315.txt, extracted byte-for-byte from the shipped
+shim). THE ORACLE EARNS ITS KEEP AGAIN: the first pass
+failed all 51 — the pinned GBNF parser's rule-name
+characters are [a-zA-Z0-9-], so rules named open_tab are a
+parse error the moment the grammar loads. The rules are
+hyphenated (open-tab, switch-tab, close-tab); the action
+strings keep their underscores (JSON content, not rule
+names). A grammar that fails to load on-device would have
+meant every grammar-on run dying at engine start — caught
+here, on the host, before any of that. GovernorTest's
+v3.15 table pins the same parity in-process.
+
+THE GOVERNOR. Tab actions classify READONLY under every
+pack, readonly included (they change no state on any site)
+— decided before the keyword pass, so an open_tab to a
+checkout URL is still navigation, never upgraded to ASK.
+But open_tab's url IS domain-judged exactly like goto's:
+a blocked domain denies it, an allowlist excludes it, and
+the seatbelt pack's injection patterns still see the url
+in the deny pass. switch_tab / close_tab carry no url or
+element surface at all.
+
+STATE DISCIPLINE (the release's real subject). Run-global
+stays global: scratchpad, planner style, pack, the ask and
+co-pilot budgets, the step budget, the correction counters.
+Per-tab (a TabState in the loop, one per open tab): the
+perception map and its MapDelta cursor (R2 deltas are now
+per-tab — a tab's first decide is FULL, and returning to a
+tab resumes ITS cursor), read chunks served, read
+completion totals, density, the last-read URL and the
+navigation/search bookkeeping the Careful/Thorough guards
+judge by. Those guards judge the ACTIVE tab only. DONE
+GROUNDING IS PER TAB: every history entry is stamped with
+the tab it happened in, and the grounding evidence for a
+done claimed in tab 2 contains tab 2's entries, the active
+tab's auto-read text, and the scratchpad — never tab 1's
+reads. The one sanctioned bridge is the scratchpad: note
+a fact in tab 1 and it grounds an answer in tab 2, which
+is what notes are for. All pinned by scripted runs (see
+TESTS): the ISO run reads 337 in tab 1, opens tab 2, and
+its 337-done is grounding-corrected; the NOTE run carries
+the same fact by note and finishes clean.
+
+TWO GUARDS, ONE SEAM. tabHere executes the three actions
+between the loop's execute and result records; tab events
+(tab_opened / tab_switched / tab_closed, registered in
+Trail.EVENT_TYPES first per house rule) are recorded on
+success only, and every decide record now carries the
+active tab (1-based). Ahead of execution, the tab guard:
+a run that may not use tabs (below) proposing one is
+corrected with the pinning reason, and an open_tab at the
+cap is corrected by RelevanceGuard.tabLimitReason ("tab
+limit: 3 tabs are already open... switch or close
+instead") — legible, recoverable, never a crash; tabHere
+re-checks the cap itself as a second fence.
+
+WHO MAY USE TABS. Ordinary runs, yes. Watched checks,
+scheduled runs, teach and replays NO — they pin tab 1,
+enforced twice: the Agent is constructed with
+tabsEnabled=false for those runs (replays and teach pass
+it directly; doStartAgent passes !(scheduleLaunched ||
+runWatched)), AND at run start the loop forces the hands
+back to tab 1 if a previous run left another tab active.
+Teach pins tab 1 too (startTeaching activates it). A run
+that ends leaves its tabs exactly as they are, for Ryan's
+inspection; the strip unlocks. Tabs do NOT persist across
+app relaunch in this release — relaunch starts with one
+tab.
+
+THE STRIP (UI). Chips per tab with host labels ("2
+example.test"), the active chip highlighted, a × on each
+chip when 2+ tabs are open, and a + chip under the cap —
+all live chrome, present during and outside runs. During a
+run (or teaching) manual tab taps are DISABLED and the
+strip dims to 35%: the v3.5 invariant — a run in progress
+is never disturbed — wins over manual inspection, stated
+here as the brief required. Approvals still pull the user
+to the AGENT screen mid-run, where the strip shows which
+tab the agent is on, locked.
+
+READ STATE FOLLOWED THE TABS TOO. WebHands read state is
+per tab now: one Eyes.ReadCursor per tab index (through
+v3.14 there was a single cursor per run, reset on every
+URL change — a tab switch would have reset it constantly)
+and read sessions keyed tab|url instead of url alone.
+
+OBSERVED, DISCLOSED: through v3.14, fitPrompt's last rung
+assembled its prompt through the 7-arg buildPrompt and
+silently dropped the style posture line at that rung (the
+one rung a very large page reaches). Threading the roster
+through the ladder put rung 5 on the full assembly, so it
+now carries posture + roster like every other rung. No
+existing pin covered rung-5-with-posture; the suite stayed
+green.
+
+TESTS. 1543 -> 1614 host tests, green twice in the
+foreground via ./run-host-tests.sh (+71 new, ONE existing
+check changed: the version pin, re-pinned to 3.15.0 /
+code 37 as every release does). New: parser rows (all
+shapes + fail-closed set), governor rows (readonly under
+all four packs incl. a checkout-url open_tab; domain bite
+both ways), the cap's pure rows, trail registration, the
+contract + decoded-grammar pins, roster rendering,
+buildPrompt/fitPrompt null-equality + roster placement,
+groundingEvidence unit rows (tab-filtered, note channel,
+null-stamp fallback), and six scripted runs: ISO (the
+done-grounding isolation), NOTE (the sanctioned channel),
+CAP (4th open corrected, run completes), DELTA (block
+sequence full/delta/full/delta/delta across two tabs),
+READISO (read completion per tab), PIN (tabsEnabled=false
+forces tab 1 and refuses open_tab; every decide stamped
+tab 1). Grammar oracle 51/51 as above.
+
+APK. 3,242,328 bytes, sha256
+f22b503c4326a7654748d031cfda3f956ff16e0412e5d1361f62bc93f50644d7,
+signed with the preserved keystore (cert SHA-256
+de6969f02188f03b78f1f56afcd231a367ae5264b2f77acea38fe746425cd71b).
+aapt2 badging on the delivered copy: com.ghosthands.app,
+versionCode 37, versionName 3.15.0; uses-permissions
+exactly INTERNET / ACCESS_NETWORK_STATE / VIBRATE /
+RECORD_AUDIO; the R6 accessibility service declaration is
+unchanged (system-bound, not exported, inert); full arm64
+lib set (libllama, libggml, libggml-base, libggml-cpu,
+libghhands, libomp); launcher icon retained. Grammar
+default still OFF — R3's flip protocol (Ryan's grammar-ON
+device A/B) is untouched by this release.
+
+DEVICE-OWED (R7): install v3.15.0; use the strip by hand
+outside a run (+ opens a tab, chips switch, × closes);
+start a run and confirm the strip is dimmed and taps do
+nothing; give a two-source goal and watch the agent open
+a second tab (roster in its prompts), switch, and answer;
+finish a run and confirm its tabs are left standing;
+relaunch and confirm one tab; teach a route and replay it
+(still tab 1); run a watched check (still single-tab).
+
+## v3.14.0 (Oct 25, 2026) — R6: Beyond the Browser (accessibility spike)
+
+Everything Train R6 of 13 (ROADMAP_EVERYTHING.md). A SPIKE:
+the deliverable is EVIDENCE plus a fenced experimental
+capability, not a feature. The question: can this app, via
+an AccessibilityService the USER enables in system
+settings, (a) read the foreground app's node tree into a
+perception-shaped structure, and (b) dispatch a tap — the
+two primitives a phone-wide governed agent would need?
+
+WHAT WAS BUILT (the fence). (1) A declared service,
+GhostA11yService, protected by BIND_ACCESSIBILITY_SERVICE
+(only the system may bind it), not exported, with a config
+(res/xml/a11y_service_config.xml) asking for exactly the
+two capabilities under test — canRetrieveWindowContent,
+canPerformGestures — and NO flags attribute: no
+interactive-windows retrieval, no view-id flag; the event
+subscription is the platform minimum and the service
+consumes no event (onAccessibilityEvent is empty). NEW
+SURFACE, CALLED OUT PLAINLY, as the brief requires: this
+release adds a service declaration to the manifest. It adds
+NO uses-permission — the set is byte-identical to v3.13
+(INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO),
+pinned by a new host test and by aapt2 on the built APK —
+and the service is INERT unless Ryan enables it in Android
+Settings: the app cannot enable it, does not try, and its
+whole advocacy is one explanatory line beside the toggle.
+(2) A second gate inside the app: the "Accessibility spike
+(experimental)" toggle in Settings > DIAGNOSTICS, default
+OFF (Settings model, key a11y_spike). SpikeGate.probesAllowed
+is the conjunction, re-judged at press time AND at fire
+time by every probe path. The service alone does nothing
+(it answers Activity calls; with the toggle off there are
+none). (3) Two probes in DIAGNOSTICS: READ captures the
+foreground window's tree through the service, converts it
+to A11yNode (GhostA11yService: at most 512 nodes / 64 deep,
+partial conversions say so), and renders a NodeSketch —
+the browser map's numbered discipline (walk-order numbers,
+entry cap 60, char budget 4000, the same truncation
+accounting). TAP dispatches ONE tap via dispatchGesture,
+either at typed coordinates or at a sketched clickable
+node's centre (chips under the readout, first eight). Both
+probes arm on a 5-second delay — at press time the
+foreground app is always THIS app, so an instant probe
+could only ever test ourselves; the delay is the minimal
+mechanism that makes the cross-app question testable, and
+it is disclosed on the button labels and in the arming
+announcement. (4) A spike log (a11y-spike-log.txt in the
+files dir, SpikeLog): every probe outcome — read,
+read_failed, tap completed/cancelled, tap_refused,
+gate_blocked — one line, detail newline-flattened, tail
+trimmed at 64K. It is not a trail and sits outside the
+DATA clear scopes. The browser agent is untouched: no
+Agent/Governor/perception code changed; the spike's only
+reuse is read-only (Settings, the UI helpers).
+
+WHAT THE TREE ACTUALLY EXPOSES (the read evidence — the
+API surface the converter copies field-for-field, pinned
+by the adapter tests). Per node: class name, text, content
+description, view-id resource name, bounds in screen
+pixels, and the node's own flags — clickable,
+long-clickable, editable, checkable/checked, enabled,
+focused, visible-to-user, PASSWORD. Plus the foreground
+package name. That is a real perception channel: structure,
+labels and geometry, in the app's own declared terms. Its
+limits are the platform's: the tree is what the app
+DECLARES, not what the screen shows — a custom-drawn or
+game/canvas surface declares few or no meaningful nodes, a
+WebView inside another app declares the WebView's nodes
+(often sparse), and there is no pixel truth in this channel
+at all (screenshots are a different API, and the one
+FLAG_SECURE actually gates). Only the ACTIVE window is
+read; the windows behind it were deliberately not asked
+for. Node identity is positional (bounds + order), not a
+handle: between a read and a tap the tree can change under
+the point, which is a governance problem, listed below.
+
+WHAT dispatchGesture CAN AND CANNOT REACH (the tap
+evidence). CAN: inject a single short stroke at raw screen
+coordinates into whatever window is topmost there, across
+apps, because it rides the system's own input pipeline;
+the answer is asynchronous and three-valued in practice —
+refused outright (boolean false: not connected, gestures
+not permitted), cancelled (another gesture, a window
+change, an interrupt), or completed. CANNOT: aim at a
+NODE — coordinates are the only address, so the read→tap
+gap is real and permanent; confirm EFFECT — "completed"
+means the gesture was injected, never what it hit, and
+the platform offers no hit receipt, so any honest trail
+must stamp delivery, not effect; act through a locked
+secure keyguard — credential entry is the system's alone,
+and the spike's converter treats a keyguard-locked tree as
+secure and withholds its text wholesale (below); type —
+a keyboard is a separate window (an input-method window),
+and tapping it is keystrokes-by-coordinate, fragile and
+credential-adjacent: out of scope for any governed design
+this spike would bless. FLAG_SECURE, stated plainly
+because intuition gets it wrong: the flag gates
+screenshots and capture. It does NOT gate node reads, and
+it does NOT gate gesture dispatch — injection into a
+FLAG_SECURE app's ordinary controls generally works,
+which is capability and risk in the same fact, and one
+more reason the governed requirements below are not
+optional. One device wrinkle the spike will meet: on
+Android 13+, a sideloaded app's accessibility service can
+be blocked by "restricted settings" until the user allows
+them in App info — the enablement path itself is part of
+the device evidence owed.
+
+PASSWORD / SECURE POSTURE. The platform usually masks a
+password node's text itself (bullets, not characters) —
+the spike does not rely on that. The discipline is the
+app's own, in two layers, either sufficient: the converter
+NEVER copies a password node's text or description into
+A11yNode (absent, not masked), and NodeSketch redacts by
+FLAG at render — a node flagged password contributes no
+text ever, even if a tree arrives with text still on it
+(the host tests build exactly that misbehaving tree and
+the render stays clean). A password node's bounds and
+flags still show, and it can be a tap target: aiming at a
+field reveals nothing it holds. A keyguard-locked capture
+is stamped secure on every node and the adapter withholds
+the whole tree's text (the flag inherits down the walk),
+classes and bounds only. What NO layer here can promise:
+an enabled accessibility service is, by platform design, a
+see-everything position — every window's text in every app
+the user opens. The spike's restraint (read on demand,
+only the active window, nothing retained but the sketch
+and the log) is the app's choice, not the platform's
+limit, and the report should not pretend otherwise.
+
+WHAT A GOVERNED CROSS-APP ACTION WOULD STILL REQUIRE
+(before any real build is proposed — none is, here):
+(1) a Governor vocabulary for foreign targets — package
+identity standing where domains stand, node class/text as
+the element name, consequentiality judged on foreign words
+(Send, Pay, Delete, Post in ANY app), and the seatbelt
+injection deny-pass applied to foreign text, because
+another app's content is untrusted input exactly like a
+web page's; (2) an approval surface that works while
+Ghost Hands is NOT foreground — today's approvals render
+in the app's own UI, and a cross-app tap happens with
+another app up front (a notification-decision channel
+with silence = deny is the shape the v3.0/v3.6 machinery
+suggests, undesigned here); (3) read→act freshness as one
+transaction — re-read immediately before dispatch, verify
+the target's identity (package + class + label + bounds)
+against the sketch, abort on drift — the a11y analogue of
+the browser hands' identity heal, because coordinates go
+stale; (4) a trail format for foreign actions (package,
+node descriptor, sketch number, gesture outcome stamped
+delivery-not-effect, per-app grants analogous to v3.13's
+site grants rather than blanket trust); (5) a kill
+posture — a per-app allowlist (act only in apps the user
+named), the spike toggle as a global stop that lands
+mid-run, and the user's Android-level revocation as the
+final word. And (6) THIS spike's device evidence (below),
+without which all of the above is paper.
+
+RECOMMENDATION: GO-IF. The primitives are real: the read
+channel is rich, structured and already in the shape of
+the perception discipline the app knows, and gesture
+injection is simple, cross-app by construction. The
+conditions: Ryan's device pass proves enablement, read and
+tap on his phone; and if a governed build is ever
+approved, it is a SEPARATE release that starts READONLY
+(sketches only, no dispatch), adds the per-app allowlist
+and the approval channel before any governed tap, and
+treats unattended cross-app acting as out of scope until
+the freshness and effect problems have honest answers.
+NO-GO, near-term, on anything beyond that.
+
+GATES. Host tests 1,543 green, run twice in the foreground
+(1,490 pre-existing + 53 new; NO pre-existing test changed
+or removed). New coverage: sketch numbering/labels/flags,
+the label cap, password redaction against a misbehaving
+tree, secure inheritance, tap-target math and its refusals
+(invisible, zero-sized, unknown), the huge-tree bounds
+(3,001 visited, entries capped, omitted exact; a 5,000-deep
+chain walked iteratively to the visited cap), the char
+budget biting before the entry cap, SpikeGate's truth
+table and state lines, SpikeLog's flattening and
+tail-trim, the toggle's settings round trip, and source
+pins on the manifest (four uses-permissions exactly, the
+service declared system-bound, 36/3.14.0), the config
+(read + gestures, no flags), the probes' gate consultation,
+and the converter's password-before-text order. One
+disclosure the brief anticipated differently: the tree had
+NO manifest assertions in the host harness to update —
+the standing permission gate was aapt2 badging, which also
+ran on this build (the four above, byte-identical) — so
+v3.14 ADDS the manifest pins new. ./build-apk.sh green;
+APK 3,238,234 bytes, sha256
+47380791bcbc40b64cee1c8746105e1dae727ca61840f42d56d33c711eee5704,
+apksigner cert de6969f0…25cd71b (the preserved keystore),
+aapt2 badging com.ghosthands.app versionCode 36 /
+versionName 3.14.0, full arm64 lib set, no lambdas, icon
+retained; the service verified in the built manifest
+(not exported, BIND_ACCESSIBILITY_SERVICE, config
+meta-data). Delivered at ~/workspace/your_files/ghost-hands.apk;
+upload JSON beside it (ghost-hands-v314-upload.json).
+Grammar default stays OFF. A run-host-tests.sh now sits in
+v1/ — the BUILD_NOTES host recipe as a script (the shim
+path argument included: 20 source-pin checks skip silently
+without it, which is how a 1,470 count can masquerade as
+the suite). Device-owed (the spike's real evidence):
+enable the service (noting any restricted-settings step),
+toggle on, read Ghost Hands itself and one real app (the
+Settings app is the honest first subject), tap one
+harmless target by chip and by coordinates, read once with
+the keyguard locked, and eyeball the spike log.
+
+## v3.13.0 (Oct 25, 2026) — R5: The Trust Pack
+
+Everything Train R5 of 13 (ROADMAP_EVERYTHING.md). Three
+features about trusting the agent with interrupted work,
+proof the governor still keeps its promises, and approvals
+that do not have to be re-given on every visit.
+
+PART A — RESUME INTERRUPTED RUNS. RunMarker grew from the
+v2.6 abrupt-death witness into the resume offer's evidence:
+a plain manual run's marker now also carries the run's
+TRAIL NAME and its CAPTURED RUN RULES — the effective pack,
+model, grammar switch, step budget, style, and the rest of
+the values Start captured, stored in the Settings model's
+own encodings (captureRunRules), so the far side of a death
+resolves them with Settings.fromMap, the very resolvers that
+built the original run. The marker is JSON now (the app's
+own Json writer/parser); a pre-v3.13 marker parses exactly
+as it always did and is never resumable. Every normal
+finish still clears the marker (finishRunUi) — including
+stuck, done, denied and error finishes, which the loop
+itself reaches. If the process dies mid-run, the marker
+survives. At launch, checkRunMarker judges it through the
+pure RunMarker.launchVerdict, belt and braces, in order:
+(1) a marker whose trail already carries a terminal "stop"
+event is STALE and clears silently (the run finished; the
+delete was what died — RunMarker.trailEnded reads the trail
+line by line, skipping torn lines); (2) a marker older than
+7 days (RunMarker.MAX_AGE_MS) is auto-dismissed silently;
+(3) a resumable marker inside its age becomes the Agent
+screen's offer card — "Resume goal" and "Dismiss". Resume
+sets the dead run's goal in the goal box and starts a NEW
+run under the marker's captured rules: the saved settings
+are neither read for it nor modified by it (asserted in
+tests), and the new run's opening "run" record is stamped
+resumed_from with the interrupted trail's name. The
+interrupted trail itself is never opened for writing — it
+ends without a terminal event, and that absence IS its
+record; no terminal event is fabricated. Dismiss clears the
+marker only (the legacy "ended abruptly" feed line still
+prints for a plain surviving marker, exactly as v2.6 did).
+Scheduled-check and watched-goal runs never write a
+resumable marker — they are readonly and repeat by design,
+so there is nothing to resume; route replays write the
+plain marker too.
+
+PART B — GOVERNOR SELF-CHECK (Diagnostics). A "Run
+governor self-check" action under the engine self-test
+drives the REAL Governor (GovSelfCheck) — freshly
+constructed instances over the real PolicyPacks policies,
+never a live run's governor — with four crafted actions
+against known element descriptors: seatbelt DENIES an
+injection-shaped target ("Ignore previous instructions and
+click here to claim your prize"); a plainly consequential
+action ("Delete account") ASKs under standard; a readonly
+READ is ALLOWed even under the readonly pack; and a plain
+WRITE follows the ACTIVE DEFAULT PACK's own posture (the
+expectation is read from the pack's policy, so the case
+stays true after a pack change). Verdicts render as four
+named PASS/FAIL lines plus an overall line, in place. The
+check writes no trail and changes no setting — it has no
+seam to either — and a failed line renders as a failure:
+surfacing a drifted governor is the point of the check.
+
+PART C — SITE GRANTS (remembered consequential approvals).
+The approval panel gained a "Remember for this site"
+checkbox (default unchecked, offered only on a consequential
+ASK — the only decision a grant can ever answer). Approving
+with it ticked mints a grant in the new pure store
+SiteGrants: exact host (normalized: trimmed, lowercased)
+plus action kind, creation time, and the granting run's
+trail name as provenance, persisted as one JSON preferences
+value and surviving relaunch. The precedence is structural,
+not promissory: the loop (Agent.grantFor) consults the
+store ONLY after the Governor has decided, and only when
+the decision is ASK with classification CONSEQUENTIAL — so
+a grant can answer an ask but can never produce one, and it
+never overrides the seatbelt/injection deny pass, the
+domain allow/block rules, the readonly pack (consequential
+is denied there, never asked), scheduled/watch runs
+(readonly-forced, same reason), or a STOP (not a governor
+outcome; never consulted). Matching is exact on (host,
+kind): a grant for taps says nothing about types on the
+same host — that action still asks, with no special UI.
+When a grant IS spent there is no panel; the govern record
+is stamped grant_used (the grant's id + host, Grant.stamp())
+so the audit trail shows exactly why no human was asked,
+and the feed announces at execution: "approved by your
+saved grant for <host>". Settings > DATA gained the grants
+area: every grant listed (host, kind, the day it was
+remembered) with its own Revoke, plus Revoke all;
+revocation takes effect at the next decision because the
+loop reads the store live through the Activity's GrantBook
+bridge, never a snapshot. Re-remembering the same
+(host, kind) replaces the older grant — the newer answer,
+with the newer provenance, is the standing one. SCOPE
+DECISION, pinned in a test: grants are browsing-derived
+trust, so "Clear browsing data" withdraws them too —
+BrowsingData's clears table went from two entries to three
+(cookies, web storage, site grants), and the dialog and
+result line say so and count them. Grants are NOT in the
+trails/goals clear scopes.
+
+GATES. Host tests 1,490 green, run twice in the foreground
+(1,402 pre-existing + 88 new; ONE pre-existing test changed:
+the BrowsingData scope check, updated to pin the grants
+decision above — disclosed here as the brief requires).
+New coverage: marker round-trips (plain, legacy,
+resumable), rules resolution through Settings.fromMap with
+saved-settings-untouched assertions, the staleness rules and
+the full launch-verdict table (incl. the exact-7-days edge),
+the self-check verdict table against the real Governor
+under all four packs, the grant store (add/replace/match/
+miss/revoke/round-trip/malformed), and run-loop scenarios
+for the resume stamp, grant spent (no panel, stamp, feed
+line), no-grant control, wrong-kind and wrong-host misses,
+grant-vs-readonly and grant-vs-seatbelt-injection
+precedence. NO new trail event types: grants and resumes
+stamp FIELDS on the existing govern and run records.
+Grammar default stays OFF; permissions identical to v3.12
+(INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO);
+no lambdas; icon retained. ./build-apk.sh green; APK
+3,225,867 bytes, sha256
+c0cdb02dc4cc7401a318bd46c63c4d9cece0d7a691b9b6be270af09569dce447,
+apksigner cert de6969f0…25cd71b (the preserved keystore),
+aapt2 badging com.ghosthands.app versionCode 35 /
+versionName 3.13.0, full arm64 lib set. Delivered at
+~/workspace/your_files/ghost-hands.apk; upload JSON beside
+it (ghost-hands-v313-upload.json). Device-owed: the resume
+card after a real mid-run death, the grant checkbox flow,
+and the self-check readout on the phone.
+
+NOTE ON PROVENANCE: this release's implementation was
+already present in the tree when the build pass began (a
+parallel attempt landed it during a period of runtime
+restart instability that also corrupted some tool reads
+mid-pass). What this pass did: audited the implementation
+against the R5 brief line by line, wrote the 88 host tests
+above against its actual APIs, found and fixed nothing in
+the implementation itself, built, verified every gate in
+the foreground, and delivered. The one test-side change to
+pre-existing coverage is the BrowsingData scope check
+noted above. (One comment in MainActivity — the v3.7
+clear-browsing header — was also corrected to name the
+grants scope; the APK was rebuilt after it, so the final
+delivered sha256 is
+89a78f6b40b9e1d9974d90eae4ed4239f5a515c14142c494118467a1eff1129d
+at the same 3,225,867 bytes; the hash in the gates paragraph
+above is the first build's.)
+
+## v3.12.0 (Oct 25, 2026) — R4: Clarify + Retry
+
+Everything Train R4 of 13 (ROADMAP_EVERYTHING.md). Two
+features that make stuck and uncertain runs cheaper: the
+planner can ASK Ryan a clarifying question mid-run instead
+of guessing, and a stuck run's answer card can offer up to
+two strategy retries — one-tap counter-moves chosen from
+what the run's own trail says went wrong.
+
+PART A — THE ASK ACTION. New planner action
+{"action":"ask","question":"..."} — the fourteenth kind.
+PlannerParse accepts it under the v3.11 discipline: the
+question is required, non-blank after trim, and stored
+trimmed; a blank, missing or non-string question fails
+closed like a search without a query. The GBNF grammar
+gained the ask rule with the question on nstring (the
+parser-required-non-blank discipline), and parity was
+re-proven both ways: GovernorTest's v3.12 table pins the
+parser rows and the decoded grammar, and the grammar-lab
+oracle's case table grew the same four rows (ask, ask
+pretty, ask empty, ask missing) — 40/40 against the
+grammar extracted byte-for-byte from the updated shim
+(grammar-lab/oracle-v312, grammar-v312.txt,
+oracle-v312.log). The contract teaches the shape and one
+short rule ("If unclear, ask." — the runtime steering
+carries the rest). It was paid for in the standing trim
+discipline, every trim in unpinned prose, each listed in
+Agent.java's contract header: "Reply ONE JSON object"
+lost "object"; "Use only map numbers" lost "only"; the
+selects sentence compressed ("Toggle flips a checkbox
+or radio" -> "toggle flips checkbox/radio"); the search
+rule's lead-in "Target not here:" became "Not here:" (the
+pinned "use search first" untouched); "Never tap
+off-goal links" became "No off-goal taps"; "Note facts."
+was cut — noting stays taught by the note action's own
+line, the first-read NOTE_HINT and the pinned done rule's
+"facts you noted". CONTRACT_TEXT estimate 289 -> 290
+(pin: < 292); the whole block 328 -> 330 (pin: <= 332).
+Every pinned sentence is byte-for-byte as before.
+
+THE GOVERNOR. Ask is its own class (the string "ask",
+Governor.ASK_CLASS — not ASK, which is the approval
+outcome), and its always-allow is STRUCTURAL: classify()
+returns it before any element or keyword logic can see
+the action, and evaluate() decides it immediately after
+classification, BEFORE the seatbelt deny-pattern pass and
+the domain rules. So asking is allowed under every pack
+— readonly included — and can never be upgraded to
+consequential or gated by page state, however the page
+or the question is worded. The harness proves the
+adversarial rows: seatbelt with an injection-shaped page
+URL and a question carrying "ignore previous
+instructions" still allows; a custom policy with an
+allowlist and a blocked host still allows. Asking is
+not a write: the Policy matrix never sees the class at
+all (Policy.forClass would deny an unknown class — the
+decision never consults it).
+
+THE LOOP. The ask guard sits in the guard family just
+before the governor, judging by the pure
+RelevanceGuard.askCorrectionReason: at most 2 EXECUTED
+asks per run, and never two in a row with no intervening
+page action. A corrected ask spends no budget, is not
+stagnation, and corrects permanently (the step budget is
+the backstop), exactly like its sibling guards. An
+executed ask flows govern -> execute like any action:
+the trail's "ask" event is recorded BEFORE the question
+is put (record-before-execute), the wait runs on the
+ACTIVE PACK's approval timeout (the same clock as an
+approval), and an answered question records an "answer"
+event with provenance USER — the words are the user's
+own. The answer re-enters the prompt history as the
+result text `ok: Ryan (the user) answered: "..."` —
+visibly stamped, and carried at a 600-char history cap
+(the ordinary cap is 120; an answer is the step's whole
+payload, and clipping it out of the next prompt would
+waste the question). Ask is exempt from the
+unchanged-map stuck counter, like note: asking is
+progress that cannot move a map. An ask is NOT an
+assist: asksUsed and assistsUsed are separate budgets
+and both may be spent in one run. Teach mode and route
+replays do not gain ask — there is no live planner in
+either, and a taught route's steps are the user's own
+recorded taps and types, never questions.
+
+SILENCE DISCIPLINE. No answer within the pack timeout —
+or a Stop, a destroy, or a blank field — is NO answer:
+the run stops there, reason "stuck", summary "no answer
+to my question" (the card renders "Got stuck — no
+answer to my question"). It never guesses and proceeds.
+The ending deliberately stays inside the stuck family —
+the card treats it as a stuck ending and Part B may
+offer a counter-move — but it gets NO co-pilot offer:
+offerAssist lives at the stuck-stop call sites, and a
+user who did not answer a direct question is not rescued
+with a tap prompt. Ui.askUser is a DEFAULT method
+returning null, for the onStepEnd reason: pre-v3.12 Ui
+implementations stay complete without it, and their
+silence fails safe into exactly this stop (proven by a
+scripted run whose Ui never overrides it).
+
+PRESENTATION. A new ask panel in the approval family
+(cyan, not red or amber: a question is a conversation):
+the question, an answer field, and a row with a voice
+chip and Answer. The voice chip runs the EXISTING
+recognizer flow — same availability and permission
+gates, and the voice-goals setting gates it too — with
+the session routed into the answer field (review-first:
+dictation fills the field; nothing submits itself). The
+v3.5 invariant holds (the panel lands the user on the
+Agent screen); when the app is backgrounded and the
+v3.6 needs-me setting is on, the wait notifies with the
+new Alerts kind NEEDS_ASK ("A run is asking you a
+question — tap to answer"). Stop and onDestroy release
+the wait as no-answer, beside the approval releases.
+
+PART B — STRATEGY RETRY. When a run ends in a stuck
+stop, the live answer card offers up to TWO buttons from
+a PURE mapping (RetryStrategy.optionsFor) over the
+trail's own events — no other input, and the class never
+sees Settings at all. Eligibility is narrow: the stop
+record's reason must be "stuck" (the unchanged-map stop,
+the planner's own stuck, the guard-family stuck stop —
+and v3.12's unanswered ask, a stuck stop by design).
+Done, denied, error and budget stops offer nothing: a
+budget stop's counter-move is a settings change the user
+makes themselves, not a button. The failure shape is
+counted from what the trail already knows: element
+failures (failed results of the loop's stale shape,
+"error: element ... not on page"), search failures
+(dead-result detour events plus failed search
+executions), thin reads (successful reads whose total
+Agent.readTotalChars parses and Eyes.isThinRead calls
+thin), and repeated-action guard blocks. The mapping:
+element-shaped -> "Retry with desktop mode on", only
+when the run record says desktop mode was OFF;
+search-shaped -> "Retry with Google as the fallback
+engine" — or Bing when Google already WAS the run's
+fallback (the button names the actual alternate, via
+SearchEngines.displayName); thin-shaped -> "Retry with
+the Thorough style", only when the run's style was not
+already Thorough. Options rank by their shape's count,
+ties break by that table order, and the cap is two.
+Repeated-action blocks and engine errors map to NOTHING
+— there is no honest one-setting counter-move for them —
+and an unmapped dominant shape never blocks a mapped one
+beneath it. Anything else, or no clear shape, offers
+nothing beyond the card's existing controls: a blind
+"Retry as-is" is not a strategy and is never offered.
+
+A RETRY is a NEW run of the same goal with the named
+override applied for that run only. The buttons live on
+the live card only (a finished run's card, including one
+reopened from its finish notification; the History
+screen's cards use a separate box and carry none). A tap
+puts the card's goal in the goal field, clears the
+saved-goal pin — deliberately: a retry is a fresh manual
+run of that goal text, and pinning it to a saved goal it
+may only resemble would earn it a watch verdict against
+the wrong baseline — stashes the pending override, and
+starts through startAgent, so EVERY normal gate applies
+(the battery guard included). doStartAgent consumes and
+clears the pending pair, then folds the override into the
+ordinary run-rule values (fallback engine, desktop mode,
+style) the Agent is constructed with: the run's own
+records therefore name the values actually in force, the
+new trail's run record additionally stamps
+"retry_override" (e.g. "fallback_engine:google") and
+"retry_of" (the original trail's file name), and the
+user's saved settings are NEVER modified — nothing in
+the retry path writes settings, and the desktop UA
+override is reverted at finish (finishRunUi re-applies
+the settings' choice), as well as at every later start.
+A retry of a retry works the same way, each naming its
+own original.
+
+TESTS. Host harness 1326 -> 1402 (+76, all green,
+foreground-verified, run twice; NO existing test changed
+— v3.11's tables and pins are untouched, and the v3.11
+obj-rule pin still passes because the rule it names is a
+prefix of the new one; v3.12 pins the full rule itself).
+The new coverage: parser rows both directions (9);
+the governor matrix — classify + evaluate under all four
+packs plus the two structural-bypass proofs and the
+outside-the-matrix pin (11); the pure ask guard (8);
+contract, grammar and trail-registration pins (5); six
+scripted runs (21 checks): the ask lifecycle with the
+stamped answer in the next prompt and ask/answer events
+on the trail, the same lifecycle under the readonly
+pack, the silence stop (one decision, no guessing), the
+default-Ui silence, the 2-ask cap with the third
+corrected, and the back-to-back correction; the retry
+table over synthetic trails (22): every mapping row,
+both applicability suppressions, the alternate-engine
+table, fat-read exclusion, unmapped-dominant non-
+blocking, tie and count ranking, the two-button cap,
+and every eligibility refusal (budget/done stops, no
+shape, no run record, null trail); and the run-record
+stamps (4), including the control proving an ordinary
+run carries neither key. One more disclosed change:
+GhAction.signature() now appends the question field —
+signatures are compared only within a run, never
+persisted, so no older trail reads differently.
+AnswerCard grew a sourceEvents view field (the events it
+was built from; the retry mapping reads it) — card text
+and share text are byte-identical to v3.11.
+
+WHAT DID NOT CHANGE. Grammar still defaults OFF.
+Permissions unchanged (INTERNET, ACCESS_NETWORK_STATE,
+VIBRATE, RECORD_AUDIO). Same package, same keystore
+(cert de6969f0...25cd71b), versionCode 34. APK
+3,221,771 bytes, sha256
+92255ba33da61312317e327e164e73d02c7c85e39a8bd14f9c9e5a4c78129937.
+
+HONEST LIMITS. The ask panel, its voice answer path and
+the retry buttons are device surfaces: host proof covers
+the loop, the governor, the mapping and the stamps, but
+the taps themselves join Ryan's device pass, with the
+accumulated field list. A watched or scheduled run whose
+planner asks will usually meet silence — the check ends
+with the honest no-answer stop and earns no done verdict
+that round; that is the discipline working, not a defect.
+Thin-read detection reads the read result's own header
+(the trail's results are truncated at 300 chars, but the
+header rides at the front, so the total survives).
+
+## v3.11.0 (Oct 25, 2026) — R3: The Grammar Hunt — VERDICT A, ROOT CAUSE FOUND AND FIXED
+
+Everything Train R3 of 13 (ROADMAP_EVERYTHING.md). The
+spike's question: why did the app close on Ryan's phone
+exactly 3 times, all on grammar-ON runs of v2.4+ builds,
+never before the grammar shipped and never once on a
+grammar-OFF run since the v2.6.1 kill switch? Answer,
+proven on host under ASan with the app's real GGUFs: our
+own shim misused the pinned llama.cpp sampler API, and
+every grammar-constrained generation was doomed by it.
+
+THE MECHANISM. The generation loop in ghhands.c sampled a
+token and then called llama_sampler_accept on the chain
+explicitly. At the pinned tree (b11382), llama_sampler_
+sample() ALREADY accepts the token it returns — src/
+llama-sampler.cpp's llama_sampler_sample ends with
+llama_sampler_accept(smpl, token). So every generated
+token was fed into the sampler chain twice. With the
+greedy sampler alone (grammar OFF) the second accept is
+stateless and invisible — which is the whole A/B: it is
+why v1.0–v2.3 never closed and why the v2.6.1 kill switch
+"fixed" the crashes by hiding the bug. With the grammar
+sampler in the chain, the grammar consumed each token
+twice: the second feed of a structural piece matches no
+transition from the advanced state, every grammar stack
+dies, and llama_grammar_accept_token throws
+std::runtime_error — "Unexpected empty grammar stack
+after accepting piece" — straight across the C JNI shim,
+uncaught, killing the process. (The same broken contract
+has a second deadly edge, proven separately: accepting
+an EOG token into a non-accepting grammar state hits an
+unconditional GGML_ABORT, "fatal error", in
+llama_grammar_accept_impl.) The Q5 requant that shared
+v2.4 was a bystander, and the v1.5 prefix cache — the
+brief's other suspect — is exonerated empirically: the
+crash reproduces identically with the cache switched off,
+because KV state was never the problem; sampler state
+was, and it is rebuilt fresh every call.
+
+THE EVIDENCE (grammar-lab/, logs quoted verbatim there).
+A fake-JNI host harness drove the UNMODIFIED v3.10 shim,
+linked against an ASan+UBSan host build of the pinned
+llama, with agent-shaped prompts (the real contract block
+as shared prefix, rotating page sketches, growing history,
+maxtok 160). Pre-fix: Q4_K_M grammar ON died on CALL 0,
+first generated token — `CAUGHT std::exception escaping
+generate(): Unexpected empty grammar stack after
+accepting piece: {" (4913)` — identically with the cache
+off, and identically on Q5_K_M, the device-default model.
+Grammar OFF: all 12 calls returned, cache reusing 385
+tokens a call. Zero sanitizer reports in any run — not a
+memory bug, an API-contract misuse. Audited and cleared
+along the way: sampler-chain ownership (the chain owns
+and frees both samplers once), per-call grammar state
+(fresh chain each generate(); no cross-call desync),
+grammar-init failure (NULL degrades to greedy with slot
+[7] reporting 0).
+
+THE FIX. One line deleted — the redundant explicit accept
+— replaced by a comment that names the trap, and
+GovernorTest pins the shim free of the call so it cannot
+quietly return. Post-fix, same instruments: Q4_K_M
+grammar ON + cache ON, ALL 12 CALLS RETURNED, grammar
+flag 1 on every call, cache reuse intact, and the planner
+walked the scripted Clinch River scenario end-to-end
+(search, tap, read, a grounded done); Q5_K_M, ALL 8 CALLS
+RETURNED. Every generated output passes the app's real
+PlannerParse (12/12 and 8/8).
+
+THE PARITY WORK (step 3 of the hunt). A grammar oracle
+(the pinned grammar engine fed a 36-case table, grammar
+text extracted byte-for-byte from the shipped shim) found
+the pre-fix grammar at 32/36: note{fact} — parsed by
+PlannerParse since v3.0 — had NO grammar rule and could
+never be emitted under the lock; and goto's url, search's
+query and choose's text could be emitted EMPTY, shapes
+the parser fails closed. The grammar now carries the note
+rule and a new nstring (one-or-more chars) for exactly
+the fields the parser requires non-blank (url, query,
+choose text, note fact); type's text keeps plain string
+(the parser accepts it empty). Post-fix oracle: 36/36.
+Parser tolerance the grammar deliberately does NOT chase
+(any key order, extra keys, string-form numbers, clamped
+negatives) stays as the second line of defense, unchanged.
+
+Host tests 1280 -> 1326 (+46, all green, foreground-
+verified, run twice): the parity table in-process (26
+canonical shapes parse with the right kind; 11 rejected
+shapes refuse) plus 9 source pins executed against the
+shim itself (no llama_sampler_accept( anywhere; the
+decoded grammar's obj rule names all 13 kinds; the
+nstring placements above).
+
+WHAT DID NOT CHANGE. Grammar still defaults OFF — the
+v2.6.1 protocol stands and the default flip is Ryan's
+call on device evidence, now with a mechanism that can
+actually pass: grammar-on field runs showing grammar:true
+on decide events and completing end-to-end (the Clinch
+River goal is the standing test), across both models,
+with zero closures. The Settings label ("experimental —
+off is the stable setting") is likewise untouched. No
+Java behaviour changed at all; no new permissions
+(INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO).
+Same package, same keystore (cert de6969f0...25cd71b),
+versionCode 33.
+
+HONEST LIMITS. The reproduction is host x86-64, not the
+phone's ARM build — but the defect is in our C source and
+the pinned library's documented behaviour, identical on
+both, and the post-fix drives exercise the exact shipped
+shim object code path with both real models. What host
+proof cannot give is the device run itself: the first
+live grammar-on exercise since v2.4 is still Ryan's
+field test, and until it lands, "fixed" means "the
+mechanism that killed every grammar-on call is gone and
+grammar-on generation now runs clean under sanitizer on
+host", nothing more. One residual note: grammar-on
+generations on device were so short-lived that no field
+trail ever showed a completed grammar-constrained step;
+there is no device baseline for grammar-on output quality
+to compare against — the field runs will create it.
+
+Build: ./build-apk.sh green (native shim rebuilt by the
+script); delivered copy cmp-verified byte-identical to
+the build output. APK: ~/workspace/your_files/
+ghost-hands.apk, 3,213,578 bytes, sha256
+57561f7f9dae1821fc72088dde15255b3a7c870cb1f95865475f58c6220bd2bb.
+Delivery link: the remote-storage upload was attempted
+four times during this run and every session was killed
+by service restarts before it printed a link; the file
+above is the verified deliverable and the link follows
+from the main chat.
+
+## v3.10.0 (Oct 25, 2026) — R2: Perception Deltas + Planner Styles
+
+Everything Train R2 of 13 (ROADMAP_EVERYTHING.md). Two
+halves: what the prompt carries per step, and how the
+planner is told to work.
+
+PERCEPTION DELTAS. Perception itself did not change: the
+stash, the heal, the fit ladder and the trail all keep
+working from the complete perceived map, exactly as
+before. What changes is the map block the prompt carries.
+The first block a run sends for a page — and any block
+after a URL change — is the full map, as always. On later
+steps of the SAME page the block is a delta against the
+last block actually sent: `+ ` entries for elements that
+entered the sent set, `~ ` entries for elements whose
+rendered line changed (identity, name, or state —
+including the v3.9 form state: a flipped checkbox, a moved
+radio choice, a changed select selection all diff as
+changes), `- ` entries for elements that left, each entry
+carrying its stable element number from the full map's
+numbering. A step where nothing changed sends one line:
+"Map unchanged since the last full map." The diff runs
+over SENT sets — the prefix of the map the standing render
+actually shows under its char budget — so an element past
+the cut is "added" the first time it enters the sent set,
+which is the truth from the planner's side of the glass.
+Four safety valves, any one of which sends the full map
+instead: a duplicated identity in either sent set (the
+diff cannot tell twins apart); a matched element whose
+NUMBER changed (the numbering the planner holds would be
+wrong); a delta whose estimated size is not smaller than
+the full map's (churn ate the saving — on a two-line page
+this fires constantly, correctly); and a full resync every
+8 deltas regardless. The fit ladder still applies on top
+of whichever block is sent; when a rung-3+ fit replaces
+the block with its own full rendering, the delta cursor
+restarts from a fresh baseline and that step records as
+full. Every decide event now records `map_block`
+(full / delta / resync), so field trails prove the same
+savings the harness measures.
+
+MEASURED SAVINGS (host harness, Agent.estTokens over the
+map blocks of scripted page sequences, stated as
+measured): a stable 30-element page across 5 steps with
+one checkbox flip — blocks est 330 vs full-map est 1365,
+75% saved. A moderately churning page (a state flip every
+step, an append every other) across 5 steps — 305 vs 945,
+67% saved. A thrash page (a fresh element inserted at the
+top every step, renumbering the rest) — 398 vs 398, 0%
+saved, every block full by design. These are map-block
+figures: the contract, history and read text ride as
+before, so a whole prompt's saving is proportionally
+smaller — the map is the dominant per-step cost on real
+pages, and it is the part that stopped being re-sent.
+
+CONTRACT. One new standing line teaches the format
+("Later steps may show only changes: + added, ~ changed,
+- removed; numbers from the last full map."), paid for in
+the standing trim discipline, every trim in prose no test
+or guard note quotes: "Reply with ONE JSON object" lost
+"with"; "Use only map numbers; answer done when met" lost
+its second clause (done is taught by the question-goal
+rule and the examples); the search rule's framing became
+"Target not here:" (the pinned "use search first" is
+untouched); "Never tap a link matching no goal term"
+became "Never tap off-goal links"; the toggle sentence
+lost ", or picks a"; the auto-read and ON-the-article
+rules lost only their lead-in clauses — their operative
+text is byte-for-byte as before. Contract est 289 (< the
+292 pin), block est 328 (<= the 332 pin).
+
+PLANNER STYLES (Settings > AGENT chips, one control on
+the same preference key discipline as every setting):
+captured at Start like every run rule and recorded on the
+run record as `style`. Balanced (default) is the posture
+every run through v3.9 used — the harness pins its
+prompts byte-identical to v3.9's. Careful adds a posture
+(note facts as you go) and a REAL guard: a done proposed
+on a page that has not been read since the last
+navigation — no planner read executed on it, no auto-read
+section shown for it, and not read to completion earlier
+this run — is corrected once ("verify: read the current
+page before finishing"), in the existing guard family
+with its own cap of 1. Fast adds a directness posture
+(prefer search, take the first strong result, do not
+re-read) and a real chunk change: the run's read chunking
+drops to the Small behavior UNLESS the user set a chunk
+size — an explicit Large or Small under READING always
+wins over the style; the style only moves the Auto
+default. Thorough adds a cross-check posture and extends
+the done-grounding guard: for a goal that both requests
+numbers and is comparison-shaped, a done's evidence must
+come from reads on at least two DISTINCT pages (planner
+reads and auto-reads both count; a plain statement of
+inability is exempt), corrected up to the grounding
+family's cap of 2. Honest limits: "distinct pages" means
+distinct URLs read, not independent sources — two pages
+of one site satisfy it. Styles govern planner runs; a
+route replay makes no planner decisions, so no posture or
+style guard engages there and its record claims no style
+(it still receives the setting with the shared knob set,
+per the v3.4 one-knob rule). The v3.9-disclosed grammar
+gap (the note action has no native grammar rule) is
+untouched — that is R3's territory, and the grammar
+switch still defaults OFF. Host tests 1214 -> 1280 (+66,
+all green, foreground-verified, run twice; the wave's
+tests live in their own harness method, like v3.9's). No
+new permissions (INTERNET, ACCESS_NETWORK_STATE, VIBRATE,
+RECORD_AUDIO). Same package, same keystore (cert
+de6969f0...25cd71b), versionCode 32. APK 3,213,581
+bytes, sha256
+4bc802526f0ac80424672c499a6a3908dd0e9a49c07069071d3600654a5829ef.
+Field check owed: a multi-step run on one page should show
+delta blocks dominating its trail's decide events.
+
+## v3.9.0 (Oct 25, 2026) — R1: The Forms Frontier Pack
+
+Everything Train R1 of 13 (ROADMAP_EVERYTHING.md). The
+agent's perception and action set were built for links,
+buttons, and text inputs; real forms were untested
+territory. This release closes it. THE FORMS MODEL, in one
+paragraph: a form's controls are perceived as first-class
+map entries that carry their state — a select shows its
+options and which is selected, a radio group is ONE entry
+carrying every choice and which is checked, a checkbox
+shows [x] or [ ], every entry carries a compact form=N tag
+naming its form — and two new governed verbs act on them:
+choose (pick a select's option by its visible label) and
+toggle (flip a checkbox, or pick a radio choice by name).
+Both are WRITE-class to the governor, exactly like type:
+silent under standard, asked under strict, denied under
+readonly, and upgraded to consequential by the same
+keyword smell type has always had. Filling never
+auto-submits; a submit is still a consequential tap, asked
+under standard as before. Host tests 1165 -> 1214 (+49,
+all green, foreground-verified, run twice; the wave's
+tests live in their own harness method, like v3.8's). No
+new permissions (INTERNET, ACCESS_NETWORK_STATE, VIBRATE,
+RECORD_AUDIO — v3.8's set exactly). No new trail event
+types (govern/execute/result already carry any action).
+Grammar default still OFF.
+
+PERCEPTION (Eyes).
+1. SELECTS as first-class entries. The extractor now
+   harvests each select's options (label + value, raw cap
+   40) and which is selected. The map renders
+   opts="Economy*|Premium Economy|Business|First" — the
+   star marks the selection, at most 12 options are shown,
+   and the rest render as "(+N more)". A select is ONE map
+   element however many options it has, so options never
+   eat the 40-element cap; they spend prompt characters
+   inside the element's own line, under the renderer's
+   existing char budget and caps, and option labels render
+   at 24 chars (display only — matching at execution runs
+   against the live DOM's full text).
+2. RADIO GROUPS. Radios sharing a name within the same
+   form collapse into ONE map entry (the group's first
+   member), rendering choices="Small*|Medium|Large" with
+   the checked choice starred. Grouping runs after dedupe
+   and before the checkables cap, so a group spends ONE of
+   the 6 checkable slots. An unnamed radio (a group of one
+   by HTML's own rules) stays a plain entry. Members stay
+   individually resolvable by identity for the heal path:
+   the group's identity is its shared name+type, and every
+   member carries its own domIndex in the group's choice
+   list.
+3. CHECKBOXES with state: the extractor harvests checked
+   (checkables only — typed text still never rides the
+   payload), and the map appends [x] or [ ]. The v2.2
+   label association supplies the label as before.
+4. DATE/TIME inputs and TEXTAREAS are typable entries as
+   they always were in the map's eyes; the type action
+   reaches them where the control accepts text. A native
+   date-picker widget a PAGE pops is out of scope (below).
+5. FORM TAGS. Every entry carries form=N (1-based) when
+   it belongs to a form; the tag rides the map line and
+   the trail descriptor (new additive keys: form, checked,
+   options, choices). Form association is a per-entry
+   tag, NOT a reordering: the map's tier order is
+   unchanged, so pre-v3.9 maps for formless pages render
+   byte-identically (pinned by test).
+
+ACTIONS.
+6. choose — {"action":"choose","el":N,"text":"label"}.
+   Matches the option by exact visible label, then exact
+   value, then a UNIQUE label prefix (the renderer's
+   24-char display cap can truncate a long label; the
+   execution match runs against the live DOM). Dispatches
+   the same input+change event pair type uses. Executed
+   through the same identity/heal discipline as taps: a
+   moved element is re-found by identity scan, and the
+   ok string names the option actually picked.
+7. toggle — {"action":"toggle","el":N} flips the
+   checkbox (or lone radio) itself;
+   {"action":"toggle","el":N,"text":"Medium"} on a radio
+   group picks that choice within the group the perceived
+   element heads. Same heal discipline; a radio re-found
+   by scan resolves its group from itself.
+8. The contract, the parser, and the native grammar all
+   learned both verbs in the same pass (choose: el+text
+   required, fails closed without either; toggle: el
+   required, text optional). The prompt contract stayed
+   inside its budget (block 329 of the 332-est cap,
+   standing text under the v2.3 bound) — paid for with
+   trims in unpinned prose, each listed: the intro's reply
+   clause ("Reply with ONE JSON object."), the wait
+   exemplar's ms and the scroll exemplar's dir (both
+   still accepted, both still defaulted), "when the goal
+   is met" -> "when met", the search rule's subject ("the
+   target is not here"), "whose text matches" ->
+   "matching", "facts the goal needs" -> "facts", "the
+   page title" -> "the title", and the examples' "Next
+   action JSON:" mirrors (the prompt's cue line keeps the
+   full phrase). The question-goal sentence was trimmed
+   in the first draft and RESTORED verbatim when the
+   harness showed a prompt test pins it — recorded here
+   so the near-miss is not repeated silently.
+
+ONE LOOP FIX THE PACK FORCED. The proving-ground
+scenario caught a real defect, not a fixture artifact:
+the same-map stuck guard counted consecutive TYPE fills
+as stagnation (typed text deliberately never rides the
+payload, so the map signature cannot move while a form
+fills) — a form with four text fields stopped "stuck"
+after the third fill. Fills (type/choose/toggle) are now
+exempt from the unchanged counter, in the exact shape of
+the read (v1.5) and note (v3.0) exemptions: the fill IS
+the progress. A fill loop stays bounded — the repeat
+ledger corrects identical re-fills, and the step cap
+ends anything else. Every pre-existing stuck test still
+passes unchanged.
+
+PROVING GROUND (host harness only). Fixtures modeled
+faithfully on httpbin.org/forms/post (the pizza form:
+customer name, telephone, email, size radios, topping
+checkboxes, delivery-instructions textarea, submit) plus
+a select-heavy travel fixture (cabin select, travelers
+select, date input, a 15-option country select for the
+cap). Scripted end to end: the pizza form perceives
+completely (10 entries, group and states correct), fills
+via type/toggle, hits the governor's submit ASK (the
+run's ONLY approval), approves, reads the results page,
+and finishes done — with the trail showing the fills
+governed as silent writes and the submit as a
+consequential ask. The travel fixture runs choose + a
+date type to done. LIVE httpbin execution is Ryan's
+field test; the harness proves the machinery against
+faithful fixtures only.
+
+HONEST LIMITS.
+- A native date/time picker widget a page pops is a
+  page-owned overlay the eyes do not map; date/time
+  inputs are covered only where the control accepts
+  typed text.
+- Option display caps: 12 shown, 24 chars per label, 40
+  harvested raw. An option past those caps is still
+  matchable by value or unique prefix, but the planner
+  cannot see its full label in the map.
+- Form grouping is a tag, not a layout: on a page with
+  several forms the planner sees form=N per entry and
+  must assemble the picture itself.
+- The repeat ledger's scope is unchanged: it covers
+  tap/type/goto. Identical choose/toggle re-proposals
+  are not ledger-corrected; they still hit the governor
+  every time and the step cap bounds them.
+- Known grammar gap, pre-dating R1 and disclosed for
+  R3 (the grammar hunt): note{fact} is parsed by
+  PlannerParse but has no rule in the native grammar, so
+  a grammar-constrained generation cannot emit it. R1
+  added choose/toggle rules only and did not widen the
+  grammar further mid-hunt.
+
+## v3.8.0 (Oct 25, 2026) — More Settings, Wave 3
+
+Ryan's ask, in full: "More." Eight more entries on the
+v3.4 discipline exactly: every control lives ONLY in the
+Settings accordion (the one-control rule), everything
+resolves through the pure Settings model (defaults,
+snap-to-nearest clamping, a load/save round trip that is a
+fixed point), and every run-affecting value is recorded on
+the run's opening "run" trail record. This wave carries
+ONE deliberate exception to the defaults-preserve rule,
+named here and in the accordion copy: the low-battery
+start warning defaults ON (item 2 — the user's battery
+died under this app's runs twice before the guard
+existed, and he was told the default before the build).
+Every other default preserves v3.7 behaviour exactly.
+Host tests 1097 -> 1165 (+68, all green, foreground-
+verified, run twice; the wave's tests live in their own
+harness method — main() reached the JVM's per-method size
+limit, a harness fact, not a product one). No new
+permissions (the set is v3.7's exactly: INTERNET,
+ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO). No new JS
+at all. No new trail event types — the wave's one new
+trail datum is a FIELD ("quiet") on the existing "watch"
+event, stamped only when it is true, so pre-v3.8 trails
+and readers are untouched. Grammar default still OFF.
+
+THE EIGHT.
+
+AGENT.
+1. KEEP SCREEN AWAKE — switch, default OFF. When ON, the
+   start of an agent run or a route replay sets
+   FLAG_KEEP_SCREEN_ON; finishRunUi — the one method every
+   ending reaches, failed model loads included — clears
+   it. The Activity tracks that IT set the flag
+   (screenAwakeHeld) and clears only its own hold. When
+   OFF nothing touches the window flags, as always. Read
+   at Start, so it applies live to the next run; recorded
+   on the run record as "screen_awake".
+2. LOW-BATTERY START WARNING — switch, default ON (the
+   exception named above; the accordion copy notes it can
+   be turned off). The decision is a new pure class,
+   BatteryGuard: warn when the setting is on AND the level
+   is known AND under 20% AND not charging AND the start
+   is user-initiated — every gated path is a button the
+   user taps (Start, a replay's Run, Teach), and the flag
+   is carried through the decision so the harness pins
+   that nothing else can warn. The Activity reads the
+   sticky battery intent at the tap (never cached) and
+   shows "Battery is at N% and not charging. Runs can take
+   several minutes. Start anyway?" — Start anyway runs the
+   exact deferred start, Cancel starts nothing. It NEVER
+   hard-blocks: there is no level at which a start is
+   refused. An unknown level (the intent named none) never
+   warns — the dialog states a number, and a number the
+   phone did not report is not one the app may invent.
+   Recorded on the run record as "battery_guard".
+
+ALERTS.
+3. FINISH BEEP — switch, default OFF. When ON, one short
+   ToneGenerator beep (TONE_PROP_BEEP, notification
+   stream, 200 ms) sounds at the finish moment in
+   finishRunUi, foreground or background. The firing
+   decision is a new pure class, FinishBeep: setting on
+   AND the run ended AND the ending is not silenced. The
+   silenced endings are the two the app has promised
+   quiet: a watched run's NO_CHANGE (silence is that
+   feature's point) and a CHANGED verdict deferred by
+   quiet hours (item 4) — the beep does not sneak an alert
+   past either promise. The generator is created once and
+   kept; a per-beep create/release would race its own
+   tone.
+4. WATCH QUIET HOURS — switch, default OFF, plus start /
+   end hour chips (0-23 in 12-hour labels, four rows of
+   six per bound, shown only while the switch is on;
+   defaults 23 and 7). The window math is a new pure
+   class, QuietHours: [start, end), correct across
+   midnight, and an equal start/end is an EMPTY window
+   (quiets nothing — an accidental equal pair must not
+   silence a day). Effect, as the copy states: during the
+   window a watched check still runs and its verdict is
+   still judged and recorded — processWatch stamps
+   "quiet": true on the CHANGED verdict's "watch" event —
+   but the change raises NO notification and NO buzz, and
+   NOTHING is sent when the window ends (the deferral is
+   a wait, never a schedule; there is no re-fire path in
+   the code). The change waits on the run's answer card,
+   whose banner (AnswerCard, reading the stamp) appends
+   "Arrived during quiet hours — kept quiet until you
+   opened the app." The baseline still advances — the
+   check fully happened; only its alert waited. NO_CHANGE
+   stays silent as always. The v3.4-era ALERTS note's
+   "it always buzzes" was amended in this wave to name
+   the quiet-hours hold.
+
+APPEARANCE.
+5. BUTTON HAPTICS — switch, default OFF. When ON, primary
+   buttons give one light VIRTUAL_KEY tick. The wiring is
+   centralized exactly as the class (a new pure decision,
+   Haptics) demands: ONE helper (maybeHapticTick), reached
+   from the shared chip-button factory's press-down touch
+   hook (every accordion chip and switch, Start/Stop, and
+   the app's other chip buttons ride it; the hook never
+   consumes, so the click paths are untouched), the drawer
+   items' clicks, and the confirm dialogs' positive
+   buttons (the battery warning's Start anyway, the three
+   DATA clears', the model delete's, Teach's intro).
+   Read at tap time — applies live. Deliberately NOT
+   gated by this: the v2.6 Start/Stop acknowledgement
+   vibrate (hapticTick), which is run machinery confirming
+   a latched state, not button furniture; the APPEARANCE
+   note says so.
+
+DIAGNOSTICS — actions and a readout, not preferences
+(no Settings keys, like the DATA clears).
+6. ENGINE SELF-TEST — button. Availability is a new pure
+   class, SelfTest: a run, replay or teach in flight
+   refuses with the line "Self-test unavailable while a
+   run is active" (busy outranks even a missing model —
+   the engine is owned); a selected model that is not
+   downloaded refuses with its own line. Otherwise, on a
+   worker thread: an engine already holding the ACTIVE
+   model is used as-is; any other state loads the
+   BRAIN-selected model, timed. One canonical prompt
+   (disclosed: it instructs the model to reply with
+   exactly {"action": "done", "summary": "self test ok"}
+   and nothing else; 64-token budget) is generated, and
+   the in-place report names the model, the load (ms, or
+   "already loaded"), prompt tok/s, generation tok/s —
+   the engine's own Stats, rates dividing honestly (a
+   zero interval reads "—") — and whether the reply
+   parsed as a valid action JSON, judged by PlannerParse,
+   the loop's own strict extractor, so the test cannot
+   pass a reply the loop would reject. A failed generate
+   reports as a failure in the engine's words, never as
+   rates. It writes NOTHING to any trail (the readout is
+   the record), and disturbs neither run state (refused
+   while any exists) nor the open page (the engine has no
+   page). One honest side effect, stated: the test's
+   prompt passes through the shared engine, so it evicts
+   the native prefix cache's contents — a perf-only
+   effect on the next run's first step.
+7. COPY DEBUG INFO — button. Copies a plain-text bundle
+   to the clipboard and reports "Copied debug info." The
+   bundle builder is a new pure class, DebugInfo, and its
+   SIGNATURE is the privacy scope: it is handed the app
+   version, the device model and Android version, the
+   selected model id and its on-device state, the
+   grammar / threads / prefix-cache / step-screenshot
+   values, and the trail and screenshot counts — and
+   nothing else exists among its inputs, so no goal text,
+   page content, trail body, URL or saved-goal name can
+   appear in what it builds. Handed values are flattened
+   single-line, so a value cannot smuggle extra bundle
+   lines. The harness pins the exact five-line bundle and
+   the scope (goal-shaped and URL-shaped fixture strings
+   appear nowhere).
+8. LIFETIME STATS — a readout in DIAGNOSTICS, computed
+   from the trail files each time the Settings screen is
+   shown (showScreen refreshes it, like the other
+   screens' lists). The computation is a new pure class,
+   TrailStats, over per-trail facts distilled from the
+   parsed events: total runs (a trail counts when it
+   carries a run record, a stop, or a summary), done
+   count and percent OF FINISHED RUNS, average steps
+   across finished runs, and the most recent run's date.
+   The honesty rules are the class's reason to exist:
+   records missing fields are SKIPPED, never zero-filled
+   — a finished run with no run_summary (every pre-v2.5
+   trail) counts toward the totals but not the average,
+   an unfinished trail counts toward the total only, and
+   no finished runs reads "none finished yet", not an
+   invented percent. Read-only; it writes nothing.
+
+HONEST LIMITS. The battery warning is advisory only, by
+design: it asks, at the levels above, and any answer the
+user gives is final — and it is a fresh decision per tap
+(a warning accepted for one start does not carry to the
+next). Quiet hours defer rather than send late: a change
+that lands at 2 AM is never announced at 7 AM; it is
+found on the card, banner-noted, which is the feature.
+The self-test writes no trail, so its evidence is the
+readout on screen — screenshot it or it is gone. The
+stats skip what legacy trails don't carry, so the
+average steps figure describes only the runs that
+recorded steps; the counts name their own denominators
+for exactly that reason. Button haptics ride the
+framework's VIRTUAL_KEY feedback, whose feel is the
+device's. The battery level is the sticky intent's
+report at the tap — the same number the system settings
+show, no fresher source exists without a receiver. All
+on-device behaviour remains device-verified, as ever;
+the grammar A/B is untouched, default still OFF.
+
+GATES (all foreground). Host tests 1097 -> 1165 (+68:
+every new key's defaults / round trip / fixed point;
+hour clamping and labels incl. garbage falling back;
+the battery-warning truth table incl. the 20% boundary,
+charging, setting-off, non-user-initiated and unknown-
+level rows, plus the dialog wording verbatim; quiet-
+hours window math inside/outside/across midnight, the
+empty window, out-of-range hours, and all four deferral
+legs; the quiet banner's presence and absence; the
+finish-beep decision's four rows; the haptics decision;
+self-test availability (busy outranking missing-model),
+the busy line verbatim, reply validity through the real
+extractor, rate math incl. the zero-interval dash, and
+the report's load / rates / verdict lines incl. the
+failure shape; the debug bundle byte-for-byte plus its
+scope pins incl. newline smuggling; TrailStats' facts,
+legacy tolerance, aggregation, percent and average
+denominators, and formats; and the fourth wave's run-
+record stamps, explicit and delegated-default). No
+existing test was changed (one harness fact, disclosed:
+the v3.8 cases live in a new method because main() hit
+the JVM size limit; the v3.7 constructor the older
+scenarios use delegates onward unchanged). ./build-apk.sh
+BUILD-OK (lambda check clean). apksigner cert
+de6969f02188f03b78f1f56afcd231a367ae5264b2f77acea38fe746425cd71b
+(the preserved keystore). aapt2 badging:
+com.ghosthands.app versionCode 30 / versionName 3.8.0;
+permissions identical to v3.7. Full arm64 lib set in the
+APK: libllama, libggml, libggml-base, libggml-cpu,
+libghhands, libomp.
+
+DELIVERABLE. ~/workspace/your_files/ghost-hands.apk —
+3,205,389 bytes, sha256
+03c95b70c7b8a626e237d6cdb4bb017c82d166cd8770bd407e30856c907947a2.
+Download: https://muse.ai/files/1450549544789833/1547442596735260/4faccaf4k1jlg5skenm0r143/ghost-hands.apk
+(expires Oct 27, 2026, 5:28 AM ET).
+
+## v3.7.0 (Oct 25, 2026) — More Settings, Wave 2
+
+Ryan's ask, in full: "More." Nine more settings, on the
+v3.4 discipline exactly: every control lives ONLY in the
+Settings accordion (the one-control rule), everything
+resolves through the pure Settings model (defaults,
+snap-to-nearest clamping, a load/save round trip that is a
+fixed point), every run-affecting value is recorded on the
+run's opening "run" trail record, and every default
+preserves v3.6 behaviour — Comfortable IS the standing feed
+sizes (12.5/11/11/13, pinned byte-for-byte), cyan IS the
+skin's accent (#38C6FF, pinned byte-for-byte), Card IS the
+landing a finished run has always had, 1.0 IS the rate
+speech has always used. Host tests 1034 -> 1097 (+63, all
+green, foreground-verified, run twice). No new permissions
+(the set is v3.6's exactly: INTERNET, ACCESS_NETWORK_STATE,
+VIBRATE, RECORD_AUDIO). No new JS at all. Grammar default
+still OFF. One registry addition, made and caught the way
+the standing rule demands: the new "step_screenshot" trail
+event type is registered in Trail.EVENT_TYPES (an
+unregistered type throws in record(); the harness's first
+run of this build caught exactly that, before anything
+shipped).
+
+THE NINE.
+
+APPEARANCE — a new accordion section, after BRAIN.
+1. ACCENT COLOR — chips Cyan / Violet / Emerald / Amber,
+   default Cyan. The choice is recorded and persisted the
+   moment it is tapped; it TAKES EFFECT WHEN THE APP
+   RESTARTS. The mechanism is honest about why: every view
+   is built once, in buildUi, and the accent it is built
+   with is resolved once in onCreate before buildUi runs
+   (Settings.accentColor / accentTintColor, packed ARGB
+   statics — cyan returns #38C6FF and the trail tint
+   rgb(159, 216, 242) byte-for-byte, so an untouched
+   install's skin cannot change). The other hues sit in the
+   same register (violet #A78BFA, emerald #34D399, amber
+   #FFB020, with pale tints for the trail text). The deep
+   navy surfaces NEVER change, and neither does the red —
+   it stays reserved for STOP / stuck / denied; only the
+   accent hue moves. No fake instant-apply: the accordion
+   copy and the feed line both say "applies when the app
+   restarts".
+2. FEED TEXT SIZE — chips Compact / Comfortable / Large,
+   default Comfortable. Scope, as stated: the steps
+   timeline's main and sub lines, the trail (raw JSON)
+   view, and the answer-card text on both card surfaces —
+   NOT every label in the app. Sizes are Settings statics
+   (main 11.5/12.5/14, sub 10/11/12.5, trail 10/11/12.5,
+   card 12/13/15); buildUi resolves them into fields the
+   views and the timeline rows read. Restart-apply, like
+   the accent (chosen over live re-layout deliberately:
+   the persistent views would each need re-sizing, and a
+   half-applied size set is worse than an honest restart).
+3. REDUCE MOTION — switch, default OFF. When ON the AGENT
+   ACTIVE pill's pulse animator never runs — the halo holds
+   a steady glow so the run state stays legible — and the
+   drawer snaps to its state instead of sliding. Read at
+   animation time in both places, so it applies live (the
+   toggle re-judges the pill at once via updatePill).
+
+AGENT.
+4. AUTO-SCROLL FEED — switch, default ON (= the feed's
+   standing follow). renderLog's scroll-to-bottom post is
+   gated on Settings.feedScrollFollows, factored pure and
+   read live (a display preference, like speak-on-finish).
+   OFF: no render ever moves the user's scroll position —
+   appended lines don't, and a run ending doesn't either;
+   the end-of-run VIEW switch still happens, only the
+   scroll position stays the user's.
+5. END-OF-RUN VIEW — chips Steps / Trail / Card, default
+   Card. showAnswerCard lands the feed on
+   Settings.feedLogModeFor(settings.endView) instead of a
+   hardcoded card. Governs agent runs and replays (both end
+   through finishRunUi -> showAnswerCard), and the
+   notification-tap card landing too (the same method).
+   Recorded on the run record as "end_view" (the name, e.g.
+   "card"). One honest split, speak-on-finish's precedent:
+   the RECORD names the value captured at Start (threaded
+   through the Agent like every run rule), while the
+   LANDING reads the live setting at the finish — flip it
+   mid-run and the run lands by the new choice while its
+   trail names the configuration it started under.
+
+VOICE & SPEECH.
+6. SPEECH RATE — chips Slower / Normal / Faster, default
+   Normal. Settings.speechRateValue maps them to
+   TextToSpeech rates 0.85 / 1.0 / 1.15. Applied in
+   speakCard — the one method every spoken path (Listen,
+   History's Listen, speak-on-finish) funnels through — so
+   it governs the next utterance, live.
+
+DATA.
+7. MODEL MANAGER — one row per registry model in DATA:
+   short name plus its on-device state ("1.29 GB on
+   phone", from the actual file's length via
+   ModelStore.humanSize, or "not downloaded"), and a
+   Delete button for each present model, behind a confirm
+   dialog naming the model and its size and stating it can
+   be re-downloaded. The rules are ModelStore.deleteVerdict,
+   factored pure and pinned as a table: ABSENT (nothing to
+   delete) / DOWNLOADING (a download session for this spec
+   is in flight — refused, with the row line "downloading
+   now — delete unlocks when it finishes"; judged before
+   IN_USE because a session's spec is always the selected
+   model, and the reason the user is looking at is the
+   transient one) / IN_USE (the BRAIN's selected model —
+   button disabled, row line exactly "in use — switch
+   BRAIN to delete") / OK. The verdict is re-judged at the
+   tap, so a model that became protected since the row was
+   drawn is refused, never deleted. Deletion is
+   ModelStore.deleteFile: exactly that model's file — the
+   other model, any .part (a later download resumes from
+   it, as always), settings and every other store are
+   outside its reach by construction, pinned against a temp
+   dir with a decoy file standing guard. Rows rebuild at
+   build, with refreshModelUi's refreshes (download
+   landing, brain switch), at download start, and after a
+   delete — the row refreshes in place. (Deleting a model
+   the engine happens to hold loaded from an earlier brain
+   is safe: the BRAIN's model is the protected one, and a
+   loaded model reads from its mapping, not the path.)
+8. CLEAR BROWSING DATA — a third clear button in DATA,
+   distinct from v3.6's two wipes, behind its own confirm.
+   It calls CookieManager.removeAllCookies + flush and
+   WebStorage.deleteAllData, then reloads the in-memory
+   page: the set home page when one is set, else the open
+   page's URL re-fetched under cleared cookies (a page
+   holding a now-cleared session does not sit there
+   pretending otherwise). Its scope is a new pure class,
+   BrowsingData: the clears table is exactly {cookies,
+   web_storage}; the keeps table names trails, shots,
+   goals, routes, models, settings; the harness pins the
+   tables disjoint and exhaustive, DataWipe-style — the
+   wipe performs no file or preference operation at all.
+   Confirm and result copy say plainly that the app's own
+   stores are NOT touched.
+
+DIAGNOSTICS.
+9. STEP SCREENSHOTS — switch, default OFF. When ON, the
+   page is photographed at every step's end as well as the
+   run's end. The capture points are the loop's own: the
+   Agent calls Ui.onStepEnd(step) — a DEFAULT interface
+   method, deliberately: the hook is purely observational,
+   no loop decision depends on it, so the v3.3-era stub tax
+   is not repeated (scenario Uis that don't care inherit
+   silence; the capture-points test overrides it and
+   counts) — exactly once per EXECUTED step: at the main
+   loop's bottom, which only the completed-execution break
+   reaches (the race / stale-stash re-decides continue the
+   same step unphotographed, and steps that ended the run
+   leave through stop() — those are the run-end photo's
+   moment), and at a replay loop's bottom after a governed
+   step executes. A replay's user-fill (password) step
+   deliberately never fires it: the fill is the user's own
+   screen, not the replay's photograph to take. The
+   Activity's capture is v3.3's visible-view capture
+   factored into captureVisibleViewJpeg, shared by both
+   photographs; the step shot lands beside the end shot
+   under Shots.stepFileNameForTrail ("-step<N>" before the
+   extension), and a "step_screenshot" trail event names
+   it. NO housekeeping at capture time: retention is the
+   run-end pruning's, and Shots.excess already counts the
+   whole store — so the v3.4 shots-kept setting governs
+   step and end photos together, as the accordion copy
+   states. AnswerCard collects the step files (trail
+   order) into stepScreenshotFiles; both cards (Agent's,
+   History's) show them as a modest horizontal thumbnail
+   strip under the end shot (sampled decodes; a file
+   retention took is skipped, never a hole; the strip
+   hides when there is nothing to show). Recorded on the
+   run record as "step_shots". Best-effort throughout: a
+   step is never failed by its photograph.
+
+HONEST LIMITS. Accent and feed text size are restart-apply
+— the app's views are built once, and both controls say so
+where they sit; nothing re-skins or re-sizes live. Feed
+text size reaches the four surfaces named above, not the
+app's labels, chips, or panels. Amber as an accent sits
+near the guard/ask amber by nature; the guard surfaces are
+labelled panels, the accent is chrome, and the choice is
+the user's. Step-shot file names sort by name like
+everything in the store, so under retention a two-digit
+step's photo can sort before a one-digit sibling's — the
+strip itself displays in trail (step) order, which is
+always right. The step strip decodes thumbnails on the UI
+thread as cards render (sampled to strip height; a
+40-step run's strip is a few dozen small bitmaps — device
+will tell if that ever bites). Browsing-data's framework
+calls and all on-device behaviour remain device-verified,
+as ever; the grammar A/B is untouched, default still OFF.
+
+GATES (all foreground). Host tests 1034 -> 1097 (+63:
+every new key's defaults / round trip / fixed point /
+strange-value resolution; accent resolution incl. the cyan
+values byte-for-byte and all eight hue/tint values
+distinct; feed sizes with Comfortable pinned to today's
+floats; the auto-scroll decision; the end-view name /
+parse / landing table; the speech-rate mapping; the
+model-manager verdict table + delete scope against a temp
+dir with decoys + human sizes; the browsing scope tables;
+step-shot naming; AnswerCard's step collection in order;
+and scripted capture points — an agent run and a replay,
+on and off, counting onStepEnd calls, with the run records'
+end_view / step_shots pinned both ways). No existing test
+was changed (the onStepEnd hook is a default method, so
+the eight scenario Uis needed no new stubs; the only
+production registry change is Trail.EVENT_TYPES gaining
+"step_screenshot", which the suite's sweep discipline
+requires). ./build-apk.sh BUILD-OK (lambda check clean).
+apksigner cert
+de6969f02188f03b78f1f56afcd231a367ae5264b2f77acea38fe746425cd71b
+(the preserved keystore). aapt2 badging:
+com.ghosthands.app versionCode 29 / versionName 3.7.0;
+permissions identical to v3.6. Full arm64 lib set in the
+APK: libllama, libggml, libggml-base, libggml-cpu,
+libghhands, libomp.
+
+DELIVERABLE. ~/workspace/your_files/ghost-hands.apk —
+3,197,194 bytes, sha256
+2656a1dff29bfea6afa8dd7e6978dd641ea863ca88cc57725710ccaebf4a7e76.
+Download: https://muse.ai/files/1450549544789833/1173366495251544/o4yzfdhh0j2q1quuvemtzliz/ghost-hands.apk
+(expires Oct 27, 2026, 5:18 AM ET).
+
+## v3.6.0 (Oct 25, 2026) — More Settings
+
+Ryan's ask, in full: "More settings." Eight of them, each in
+the Settings accordion and nowhere else (the one-control
+rule), each resolved through the pure Settings model with the
+standing discipline (defaults, snap-to-nearest clamping, a
+load/save round trip that is a fixed point), and each with a
+default that reproduces v3.5's behaviour exactly — one
+disclosed exception, trail retention, whose subject had no
+behaviour to preserve (see 5). Host tests 968 -> 1034 (+66,
+all green, foreground-verified, run twice). No new permissions
+(the set is v3.5's exactly: INTERNET, ACCESS_NETWORK_STATE,
+VIBRATE, RECORD_AUDIO). No new JS — desktop mode is
+WebSettings, as the framework intends. Grammar default still
+OFF. Every value that affects a run is recorded on that run's
+opening "run" trail record, beside "model" and
+"grammar_setting": threads, fallback_engine, desktop_mode,
+prefix_cache.
+
+THE EIGHT.
+
+BRAIN.
+1. CPU THREADS — chips 2 / 4 / 6, default 4 (the value the
+   shim hardcoded through v3.5). The native context is
+   created with the count, so the engine reads it at model
+   load only: ModelEngine carries it (setThreads, clamped to
+   the shim's [1, 8]) and loadModel's JNI signature grew the
+   parameter. A loaded model is never disturbed; the run
+   record cites the engine's loadedThreads() when a model is
+   loaded — the count the run actually computed with — and
+   the setting otherwise (a replay loads nothing). The
+   accordion copy says it plainly: applies at the next model
+   load; switching brains or restarting picks it up.
+
+READING.
+2. FALLBACK SEARCH ENGINE — chips DuckDuckGo / Google /
+   Bing, default DuckDuckGo. The choice is the search
+   action's path (c) only: site-native search is always tried
+   first, exactly as before, and the results recognition that
+   keeps the loop honest (RelevanceGuard) has covered all
+   three engines' pages since v2.1. The mapping is a new pure
+   class, SearchEngines: for the default it returns the
+   pre-v3.6 URL (html.duckduckgo.com/html/?q=) and the
+   pre-v3.6 report string byte-for-byte — the harness pins
+   both. Captured at Start like every run rule
+   (runFallbackEngineId), so it cannot change mid-run.
+3. DESKTOP MODE — switch, default OFF. ON puts a desktop
+   Chrome user agent on the WebView (Settings.DESKTOP_USER_
+   AGENT through the pure Settings.userAgentFor). Disclosure:
+   the wide viewport and overview mode the feature is usually
+   described with have been ON in this WebView since v1, in
+   both modes — the user agent is desktop mode's whole delta,
+   and turning it off restores the WebView's own default UA
+   string, captured in setupWebView before any change, so OFF
+   is byte-for-byte the old behaviour. Applied at launch, on
+   the toggle, and at every run start; changing the UA reloads
+   nothing, so it governs pages loaded after the change — the
+   accordion copy says exactly that.
+
+ALERTS.
+4. NEEDS-ME NOTIFICATIONS — switch, default OFF (through
+   v3.5, waits never notified). When ON, a wait that BEGINS
+   while the app is not in the foreground also posts a
+   notification (Alerts.postNeedsYou, on the v3.0 runs
+   channel): an approval pending (awaitApproval's entry) or a
+   co-pilot rescue offered (runPause's entry, identifyTap
+   only). The decision is a new pure class, NeedsMe —
+   setting on AND waiting AND background; any leg false is
+   silence, and the harness pins the full table. Foreground
+   waits never notify (the panel is already up). The tap
+   carries no extras: the waiting panel already switched the
+   app to the Agent screen when it was shown (the v3.5
+   invariant), so the user lands on the decision itself.
+   Deliberately NOT a needs-me wait: the route replay's
+   password fill (awaitUserResume) — the setting's promise
+   names approvals and rescues, and the fill stays panel-only.
+   HONEST LIMIT: POST_NOTIFICATIONS is still not declared, so
+   like the finish notes these appear only if the user has
+   allowed notifications for the app in system settings; the
+   machinery posts regardless and the OS decides.
+
+DATA.
+5. TRAIL RETENTION — chips 10 / 25 / 50, beside the
+   screenshot count. VERIFIED FROM THE CODE FIRST: trails
+   were never pruned — every run's JSONL accumulated without
+   bound through v3.5 (only screenshots had a cap, since
+   v3.3). The default of 25 is therefore a NEW cap arriving,
+   not a preserved behaviour; the Settings field doc and this
+   section say so rather than dressing it as continuity.
+   Pruning runs at the same housekeeping point as screenshot
+   pruning (the run-end screenshot block in finishRunUi —
+   faithfully, that means it runs when a run's screenshot was
+   captured, as the shots prune does) under a new pure
+   policy, TrailPrune.excess: keep the newest N, except a
+   protected name is never taken and does not consume a keep
+   slot. Protected: the currently open run's trail (its watch
+   verdict is still to be written into it when housekeeping
+   runs) and any watched goal's baseline trail. To make the
+   second protection real rather than aspirational, a goal's
+   baseline now NAMES its source trail: SavedGoals carries
+   baselineTrailName inside the baseline record (serialized
+   as base.trail when non-empty; parse is lenient, older
+   records read as ""), processWatch stamps it, copyWatchFrom
+   carries it, clearBaseline clears it. Baselines set before
+   v3.6 name no trail and protect none — their first watched
+   run under this build stamps the name.
+6. CLEAR-DATA ACTIONS — two buttons at DATA's foot, actions
+   not preferences (no Settings keys exist for them), each
+   behind a confirm dialog that names exactly what will be
+   deleted — the live counts included — and states that it
+   cannot be undone; each reports its result on the line
+   under its button ("Cleared N trails and M screenshots." /
+   "Nothing to clear — ..."). "Clear trails and screenshots"
+   wipes the trails store and the shots store; "Clear saved
+   goals and routes" empties the two preference stores
+   (disarming every scheduled check first, so no alarm fires
+   for a goal that no longer exists) and refreshes the Goals
+   and Routes screens. The scope is structural, in a new pure
+   class, DataWipe: it deletes regular files directly inside
+   the directories it is handed — no recursion, no siblings —
+   and it is handed only the two file stores; models live in
+   their own directory and settings in SharedPreferences, so
+   neither wipe can reach them, nor the other store. A run in
+   flight keeps its trail through the file wipe (protected by
+   name, as in pruning; the dialog and the result line both
+   say so). The harness pins the scope against temp dirs with
+   a decoy model file beside the stores.
+
+DIAGNOSTICS — a new accordion section, after ALERTS, before
+DATA.
+7. LIVE STATS — switch, default OFF. When ON, the run's
+   status area and its closing lines show live generation
+   speed and prompt-cache reuse: after every decide that
+   evaluated a prompt, the Agent posts a status line ("⚡ 13.9
+   tok/s · 40% prompt reused · step 3", cumulative over the
+   run's tallies); at the stop, the run_summary trail record
+   gains gen_tokens / gen_ms, the feed's summary line gains
+   ", gen 13.9 tok/s" (only when the run generated anything),
+   and the stopped status keeps the fragment ("Agent stopped:
+   done · ⚡ ..."), so the last run's numbers stay in the
+   status area. The numbers are the ones the engine already
+   reports per call (ModelEngine.Stats.lastGenTokens /
+   lastGenMs, tallied beside the prompt tallies since this
+   build). All formatting is pure statics on Agent and
+   harness-pinned. When OFF, nothing changes anywhere — the
+   records, lines and statuses are byte-for-byte v3.5's (the
+   harness runs the same scripted run both ways and pins the
+   difference to exactly the stats surfaces).
+8. PREFIX CACHE — switch, default ON (the behaviour since
+   v1.5). OFF threads through ModelEngine into the shim's
+   generate() beside the grammar flag: the shim drops its
+   cached prompt and never consults or refreshes it, so every
+   step pays full prompt evaluation — the pre-v1.5 behaviour,
+   kept for A/B diagnosis in the grammar-hunt tradition. The
+   decide records show it without any new field: reused_tokens
+   reads 0 on every step of an off run. Applies per call, so
+   even a running agent obeys a flip; runs record the value
+   captured at Start.
+
+HONEST LIMITS. Threads and desktop mode are NEXT-LOAD /
+NEXT-PAGE settings by construction — their copy says so, and
+nothing in the app pretends otherwise (no forced reload,
+which for threads would mean yanking a loaded model mid-
+session). Needs-me is decided when a wait begins; a wait that
+starts in the foreground and is carried into a pocket does
+not retro-notify. Clear-data is irreversible by design — the
+confirm dialogs say so in those words; there is no trash, no
+undo, no cloud copy. Desktop mode cannot make a site serve a
+desktop page it does not have; it asks, in the standard way.
+Live stats' speed is the run's cumulative average over its
+own tallies, not an instantaneous rate. Navigation feel and
+all on-device behaviour remain device-verified, as ever; the
+grammar A/B is untouched, default still OFF.
+
+GATES (all foreground). Host tests 968 -> 1034 (+66: settings
+defaults / round trip / clamps for every new key; the
+fallback URL + report mapping incl. the DDG byte-for-byte
+pins; the needs-me truth table; trail-pruning math incl.
+baseline protection and keep-slot accounting; clear-data
+scope against temp dirs; engine thread clamping and the
+prefix-cache carrier; the baseline-trail round trip; live-
+stats formatting; and a scripted run each way pinning the run
+record's four new fields and the on/off record difference).
+./build-apk.sh BUILD-OK (lambda check clean). apksigner cert
+de6969f02188f03b78f1f56afcd231a367ae5264b2f77acea38fe746425cd71b
+(the preserved keystore). aapt2 badging: com.ghosthands.app
+versionCode 28 / versionName 3.6.0; permissions identical to
+v3.5. Full arm64 lib set in the APK: libllama, libggml,
+libggml-base, libggml-cpu, libghhands, libomp (libghhands
+rebuilt — the JNI signatures for loadModel and generate
+changed this release).
+
+DELIVERABLE. ~/workspace/your_files/ghost-hands.apk —
+3,193,098 bytes, sha256
+dfa22bdb697a5b18923e439a2aacbc2a8045995f80b2e37bfcb0fad2f2ad1f89.
+Download: https://muse.ai/files/1450549544789833/1052968084484033/4jgb68c6layp6fpnxs6ur285/ghost-hands.apk
+(expires Oct 27, 2026, 5:03 AM ET).
+
+## v3.5.0 (Oct 25, 2026) — The Drawer
+
+Ryan's ask: "creat a screen that u can slide open from the left
+and it has settings tab and u click it and had organized
+sections" — then, on the design: "Build the drawer layout."
+Host tests 957 -> 968 (+11, all green, foreground-verified,
+run twice). No new permissions (the set is v3.4's exactly:
+INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO). No new
+JS at all — the drawer, the screens and the edge swipe are
+framework views and touch dispatch only, so the harness's
+emitted-script validation surface is unchanged. Grammar
+default still OFF; the crash A/B is untouched by this release.
+THIS IS A LAYOUT RELEASE: no setting semantics, no guard math,
+no run behaviour changed. Any behaviour difference found on
+device is a bug, not a redesign.
+
+THE LAYOUT MAP. The single stacked scroll is gone. The
+activity is now a shell: persistent chrome (the header —
+hamburger, wordmark, live status pill) over a host holding
+five screens as view groups swapped by VISIBILITY ONLY, plus
+a drawer layer on top.
+
+- AGENT (home, the default): the model status/download line,
+  the address bar, the WebView stage, the goal card (goal
+  field, mic, Save goal, Teach), Start/Stop, the approval /
+  teach / assist panels, and the log card with its Steps /
+  Trail / Card views and the Past chip. Start/Stop and the
+  status pill never leave this screen (the pill is chrome: it
+  rides the header and so is visible on every screen).
+- SAVED GOALS: the v3.0 dialog's list, graduated to a screen —
+  same rows (load, ✕ delete, ⏰ schedule, 👁 watch + baseline
+  line), same dialogs behind them. Loading a goal switches to
+  the Agent screen with it loaded.
+- ROUTES: the v3.3 dialog's list (▶ Run, ✕ delete) plus a
+  "Teach a new route" entry at the card's head. Starting a
+  replay — or entering Teach — switches to the Agent screen:
+  both live at the browser.
+- HISTORY: the Past chip's picker, graduated — the trail
+  list, newest first; tapping a run shows its answer card
+  WITH its screenshot in this screen, with its own Share and
+  Listen controls (the Agent card's behaviour, speaking and
+  sharing the picked past card).
+- SETTINGS: the v3.4 accordion, MOVED WHOLE — same six
+  sections, same controls, same Settings model and keys, same
+  About block at its foot. The BRAIN chips and grammar switch
+  were NOT re-created: the very views moved, handlers and
+  preference keys untouched, so an upgrade's brain and grammar
+  values carry over byte-for-byte, as in v3.4.
+
+THE DRAWER. A 276dp navy panel (the v3.4 skin gradient) over
+a scrim. Its head is the spectral-hand launcher icon (the real
+application icon, via the package manager) beside the
+wordmark; its items are the five screens, flat — a tap goes
+to the screen and closes the drawer, never deeper; its foot
+is the About footer (version + repo), not a screen. It opens
+from the hamburger beside the wordmark and from a left-edge
+swipe (a rightward drag starting within 24dp of the edge that
+outruns its vertical drift by 1.6x, tracked at touch dispatch
+so nothing is consumed until the gesture proves itself);
+it closes on scrim tap, item tap, and Back.
+
+THE HARD INVARIANTS, AS BUILT.
+
+1. A RUN IS NEVER DISTURBED BY NAVIGATION. Screens are
+   swapped by visibility only — the WebView, the agent thread,
+   the feed and every run field are created once in buildUi
+   and never rebuilt, re-parented or re-created by navigation.
+   Navigating away mid-run and back shows the live feed intact;
+   the v2.6 instant Start/Stop acknowledgement and the pill
+   states work from the Agent screen exactly as before.
+2. DEEP LINKS LAND RIGHT. The finish-notification tap and the
+   watch-change tap (EXTRA_CARD_TRAIL) land on AGENT showing
+   the card, exactly as v3.0's flows landed; the scheduled-
+   check tap (EXTRA_GOAL_NAME) loads the goal, and loading a
+   goal now explicitly switches to AGENT — the same screen
+   today's flow implied.
+3. ROUTE REPLAY switches to AGENT before it starts
+   (startRouteReplay), so the replay's feed and card appear
+   where an agent run's do.
+4. TEACH entered from ROUTES switches to AGENT first (the
+   recording uses the browser, as today's teach flow does);
+   the Agent screen's own Teach chip is unchanged.
+5. BACK: closes the drawer if open; otherwise returns to
+   AGENT from any screen; on AGENT it keeps today's behaviour
+   exactly — the activity had no onBackPressed override
+   before, and BACK_PASS_THROUGH is the super call.
+6. GOVERNED SURFACES ARE NEVER LOST. The delete/schedule/
+   save/replay confirmation dialogs are modal and surface
+   over any screen, as before. The APPROVAL panel and the
+   CO-PILOT pause panel are views on the Agent screen, so
+   this build's handling is: when either is shown (the same
+   runOnUiThread panels as v3.3/v2.x), the app first switches
+   to the Agent screen — an approval arriving while the user
+   sits in Settings brings them to the panel instead of
+   letting the wait run down on a hidden screen. The governor
+   itself is untouched: the wait, the timeout and the
+   silence-is-never-consent rule are exactly v3.4's. (The
+   co-pilot pause only exists while the app is foreground;
+   finishRunUi deliberately does NOT force navigation — a
+   finished run's card waits on the Agent screen and its
+   notification, as before.)
+
+THE DECISIONS ARE PURE. A new NavState class holds everything
+the layout must decide — current screen, drawer open/closed,
+the Back resolution order (drawer, then home, then system),
+the deep-link landing (always AGENT: card and goal both live
+there), and the browser-flow home (AGENT). MainActivity keeps
+only the sliding: NavState.goTo always closes the drawer
+behind a selection; goTo with an unknown id lands on AGENT,
+because flat navigation has no deeper place to fall into.
+The harness pins all of it (+11 checks).
+
+WHAT MOVED, MECHANICALLY. buildUi now builds a FrameLayout
+shell (chrome column + screen host + drawer layer). The old
+root column IS the Agent screen, view for view — every
+root.addView call from v3.4 lands there unchanged. The
+settings card's single addView retargeted to the Settings
+screen's ScrollView (a fresh FrameLayout.LayoutParams in place
+of its LinearLayout one, so the top margin survives the
+ScrollView). showSavedGoals / showRoutes / showPastRuns are
+now navigation entry points; their dialog row code became
+refreshGoalsList / refreshRoutesList / refreshHistoryList,
+populating persistent screen containers, rebuilt on entry and
+after every in-screen mutation (watch toggle, schedule set or
+remove, goal delete, route delete) so a list never shows a
+state a dialog already changed. The History card is a second
+AnswerCard slot (historyCard) with its own screenshot view
+and Share/Listen chips; the Agent card's slot is untouched.
+The log head's Past chip now lands on History.
+
+HONEST LIMITS. Navigation FEEL is device-verified, not
+host-proven: the slide timings (panel 230ms decelerate in,
+200ms accelerate out; scrim fades), the edge-swipe thresholds,
+and the highlight are judgment calls the host cannot judge —
+Ryan's eyes settle them. The edge swipe is tracked at
+dispatch and never consumed unless it proves itself, but a
+WebView edge gesture that begins as a fast rightward drag
+could in principle open the drawer when the user meant to
+scroll the page; the 24dp strip and the 1.6x direction ratio
+are the mitigation, and the hamburger always works. The
+History screen's card shows the screenshot at the store's
+retention — a trail whose shot was pruned shows the card
+without it, as the Past flow did. Nothing about models,
+prompts, the governor, the fit ladder, watch evidence, route
+identity or settings semantics moved: if v3.5 behaves
+differently from v3.4 during a run, that is a defect in this
+layout change, and the trail will show it.
+
 ## v3.4.0 (Oct 25, 2026) — Settings, In An Accordion
 
 Ryan's ask: "Add more settings and put them into a collapsible

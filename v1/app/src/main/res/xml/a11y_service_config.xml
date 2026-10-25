@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v3.14 (Everything Train R6 — the accessibility spike):
+     the spike service's configuration, named to the system in
+     the manifest's meta-data. It asks for the two capabilities
+     the spike's questions are about — reading window content
+     (canRetrieveWindowContent) and performing gestures
+     (canPerformGestures) — and nothing beyond them: no flags
+     attribute at all (the spike reads the ACTIVE window only,
+     so no interactive-windows retrieval, and no view-id flag
+     either), and the event subscription is the minimum a
+     service declares (the spike pulls on demand and consumes
+     no event). The description string is what Android Settings
+     shows the user at the consent surface; it says what the
+     spike is, in the open. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/a11y_service_description"
+    android:notificationTimeout="100" />

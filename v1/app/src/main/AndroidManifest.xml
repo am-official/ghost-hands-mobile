@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ghosthands.app"
-    android:versionCode="26"
-    android:versionName="3.4.0">
+    android:versionCode="38"
+    android:versionName="3.16.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -42,5 +42,45 @@
         <receiver
             android:name=".CheckReceiver"
             android:exported="false" />
+        <!-- v3.14 (Everything Train R6 — the accessibility
+             spike): the spike's AccessibilityService. NEW
+             SURFACE, called out plainly: this declares a
+             service the user may enable in Android Settings;
+             it adds NO uses-permission (the four above are
+             the whole set, unchanged) and the service is
+             inert unless the user enables it there AND the
+             experimental toggle in Settings > DIAGNOSTICS is
+             on (SpikeGate). The BIND_ACCESSIBILITY_SERVICE
+             permission below is the service's own protection
+             (only the system may bind it), not an app
+             permission. -->
+        <service
+            android:name=".GhostA11yService"
+            android:label="@string/app_name"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/a11y_service_config" />
+        </service>
+        <!-- v3.16 (Everything Train R8 — governed downloads):
+             the downloads store's content provider. NEW
+             SURFACE, called out plainly like the service
+             above: it exists so a stored file can be opened
+             in a system viewer or shared (a file:// URI is
+             refused at this target SDK). It serves ONLY the
+             app's private downloads directory, read-only, is
+             not exported, and answers only through per-URI
+             read grants the app hands out itself. It adds NO
+             uses-permission — the four above are still the
+             whole set. -->
+        <provider
+            android:name=".DlProvider"
+            android:authorities="com.ghosthands.app.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

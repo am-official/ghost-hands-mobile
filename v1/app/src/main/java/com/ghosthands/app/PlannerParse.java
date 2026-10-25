@@ -51,7 +51,8 @@ public final class PlannerParse {
         if (!GhAction.isKind(kind)) return null;
         GhAction a = new GhAction(kind);
 
-        if ("tap".equals(kind) || "type".equals(kind)) {
+        if ("tap".equals(kind) || "type".equals(kind)
+                || "choose".equals(kind) || "toggle".equals(kind)) {
             Integer el = asInt(m.get("el"));
             if (el == null || el.intValue() < 1) return null;
             a.el = el.intValue();
@@ -60,6 +61,27 @@ public final class PlannerParse {
             Object t = m.get("text");
             if (!(t instanceof String)) return null;
             a.text = (String) t;
+        }
+        if ("choose".equals(kind)) {
+            // v3.9 (R1): the option is named by its visible label —
+            // a choose without one names nothing, so it fails
+            // closed like a type without text.
+            Object t = m.get("text");
+            if (!(t instanceof String)
+                    || ((String) t).trim().length() == 0) return null;
+            a.text = ((String) t).trim();
+        }
+        if ("toggle".equals(kind)) {
+            // v3.9 (R1): text is the radio choice to select; a
+            // checkbox toggle (or selecting the radio itself)
+            // needs none. A present-but-blank text reads as
+            // absent; a non-string text fails closed.
+            Object t = m.get("text");
+            if (t != null && !(t instanceof String)) return null;
+            if (t instanceof String
+                    && ((String) t).trim().length() > 0) {
+                a.text = ((String) t).trim();
+            }
         }
         if ("goto".equals(kind)) {
             Object u = m.get("url");
@@ -88,6 +110,44 @@ public final class PlannerParse {
             Object f = m.get("fact");
             if (!(f instanceof String) || ((String) f).trim().length() == 0) return null;
             a.fact = ((String) f).trim();
+        }
+        if ("ask".equals(kind)) {
+            // v3.12 (R4): a question that names nothing fails
+            // closed like a search without a query — asking an
+            // empty question would only burn the ask cap.
+            Object q2 = m.get("question");
+            if (!(q2 instanceof String) || ((String) q2).trim().length() == 0) return null;
+            a.question = ((String) q2).trim();
+        }
+        if ("open_tab".equals(kind)) {
+            // v3.15 (R7): the url is optional — a bare open_tab
+            // opens a blank tab. Same treatment as toggle's text:
+            // a present-but-blank url reads as absent; a
+            // non-string url fails closed.
+            Object u = m.get("url");
+            if (u != null && !(u instanceof String)) return null;
+            if (u instanceof String
+                    && ((String) u).trim().length() > 0) {
+                a.url = ((String) u).trim();
+            }
+        }
+        if ("read_file".equals(kind)) {
+            // v3.16 (R8): the document is named, as the prompt's
+            // Files line lists it — a read_file without a name
+            // names nothing, so it fails closed like a search
+            // without a query.
+            Object n = m.get("name");
+            if (!(n instanceof String)
+                    || ((String) n).trim().length() == 0) return null;
+            a.name = ((String) n).trim();
+        }
+        if ("switch_tab".equals(kind) || "close_tab".equals(kind)) {
+            // v3.15 (R7): the tab number is required and 1-based,
+            // exactly like el — a tab action that names no tab
+            // fails closed, never a guess.
+            Integer t = asInt(m.get("tab"));
+            if (t == null || t.intValue() < 1) return null;
+            a.tab = t.intValue();
         }
         if ("done".equals(kind)) {
             Object sm = m.get("summary");

@@ -178,6 +178,60 @@ public class ModelStore {
                 ? " · on phone" : " · " + gbLabel(spec) + " download");
     }
 
+    // ---- the model manager (v3.7, DATA) -------------------------
+    //
+    // The DATA section's per-model rows: each known model, its
+    // on-device state, and a Delete for the ones that may go.
+    // The verdict below is the whole rule set, factored pure so
+    // the harness pins it: a model is deletable only when its
+    // file is present, it is not the BRAIN's selected model,
+    // and no download session for it is in flight. Deletion
+    // itself (deleteFile) removes exactly that model's file —
+    // the other model, any partial download, settings and every
+    // other store are outside its reach by construction.
+
+    public static final int DELETE_OK = 0;
+    public static final int DELETE_ABSENT = 1;
+    public static final int DELETE_DOWNLOADING = 2;
+    public static final int DELETE_IN_USE = 3;
+
+    /**
+     * May this model's file be deleted right now? The order is
+     * the rows' honesty: an absent file has nothing to delete;
+     * a live download session for this spec is the transient
+     * fact the user is looking at (the session's spec is always
+     * the selected one — a download only ever fetches the BRAIN
+     * choice — so this leg is named before the in-use leg, and
+     * the row's reason changes from "downloading" to "in use"
+     * when the session lands); the selected model is protected
+     * for as long as it is selected.
+     */
+    public static int deleteVerdict(Spec spec, String selectedId,
+                                    boolean present,
+                                    boolean downloadInFlight) {
+        if (spec == null || !present) return DELETE_ABSENT;
+        if (downloadInFlight) return DELETE_DOWNLOADING;
+        if (spec.id.equals(resolveId(selectedId))) {
+            return DELETE_IN_USE;
+        }
+        return DELETE_OK;
+    }
+
+    /** A byte count for a settings row: GB with two decimals
+     *  at model scale, MB with one below it, raw bytes for
+     *  anything smaller. */
+    public static String humanSize(long bytes) {
+        if (bytes >= 1000000000L) {
+            return String.format(Locale.US, "%.2f GB",
+                    bytes / 1000000000.0);
+        }
+        if (bytes >= 1000000L) {
+            return String.format(Locale.US, "%.1f MB",
+                    bytes / 1000000.0);
+        }
+        return bytes + " B";
+    }
+
     public interface Listener {
         void onProgress(long done, long total);
         void onStatus(String s);
@@ -209,6 +263,20 @@ public class ModelStore {
     public boolean ready(Spec spec) {
         File f = fileFor(spec);
         return f.exists() && f.length() == spec.size;
+    }
+
+    /**
+     * v3.7 (the model manager): delete exactly this model's
+     * file — nothing else in the directory is named, so nothing
+     * else can go: the other model's file and any .part files
+     * survive by construction (a partial is a different name,
+     * and a later download resumes from it as it always has).
+     * Returns true when a file was actually deleted.
+     */
+    public boolean deleteFile(Spec spec) {
+        if (spec == null) return false;
+        File f = fileFor(spec);
+        return f.exists() && f.delete();
     }
 
     /** Whether the DEFAULT model is in place (the v2.5 meaning). */

@@ -26,6 +26,20 @@ public class CheckReceiver extends BroadcastReceiver {
         if (name == null) return;
         SharedPreferences prefs = context.getSharedPreferences(
                 "ghosthands", Context.MODE_PRIVATE);
+        // v3.16 (R8): a page watch's alarm carries its prefix —
+        // same receiver, same re-judgement: a watch deleted or
+        // unscheduled since the alarm was armed fires nothing.
+        if (PageWatches.isPageAlarm(name)) {
+            PageWatches watches = PageWatches.parse(
+                    prefs.getString(
+                            PageWatches.PREF_PAGE_WATCHES, null));
+            PageWatches.PageWatch w = watches.find(
+                    PageWatches.urlFromAlarm(name));
+            if (w == null || !w.hasSchedule()) return;
+            Alerts.postPageWatchCheck(context, w);
+            Alerts.armPageWatchCheck(context, w);
+            return;
+        }
         SavedGoals store = SavedGoals.parse(
                 prefs.getString(Alerts.PREF_SAVED_GOALS, null));
         SavedGoals.SavedGoal g = store.find(name);

@@ -35,6 +35,11 @@ import java.util.TimeZone;
  *   the one run that notifies even in the foreground, via
  *   postWatchChanged below, carrying its first diff line; a
  *   watched run that did not change stays silent entirely.
+ * - Needs-me (v3.6): when the setting is on, a run that starts
+ *   waiting on the user (a governor approval, a co-pilot rescue
+ *   offer) while the app is in the background posts
+ *   postNeedsYou; the NeedsMe decision gates every post, and a
+ *   foreground wait never notifies.
  *
  * Android 13+ note (disclosed in the release notes): this app
  * targets API 34 but deliberately does NOT declare
@@ -53,6 +58,14 @@ public final class Alerts {
     public static final String EXTRA_GOAL_NAME = "saved_goal_name";
     public static final String EXTRA_FROM_CHECK = "from_check";
     public static final String EXTRA_CARD_TRAIL = "card_trail_path";
+
+    /** v3.6 (needs-me): the waits that can ask for the user —
+     *  the kinds postNeedsYou words its text for. v3.12 (R4)
+     *  adds the third: a run asking the user a clarifying
+     *  question is a needs-me wait of exactly this family. */
+    public static final String NEEDS_APPROVAL = "approval";
+    public static final String NEEDS_COPILOT = "copilot";
+    public static final String NEEDS_ASK = "ask";
 
     /** The preferences key the saved-goals JSON lives under (the
      *  preferences file is MainActivity's "ghosthands"). */
@@ -133,6 +146,40 @@ public final class Alerts {
         }
         Notification n = build(ctx, CHANNEL_RUNS,
                 "Ghost Hands — watch: " + goalName, text, pi);
+        notify(ctx, id, n);
+    }
+
+    /** v3.6 (needs-me): a run is WAITING on the user and the app
+     *  is in the background (the decision itself is NeedsMe's,
+     *  made by the caller at the wait's entry point). The tap
+     *  brings the app forward with no extras: the waiting panel
+     *  already switched the app to the Agent screen when it was
+     *  shown (the v3.5 invariant), so the user lands on the very
+     *  decision that is waiting. Posted per-kind, so an approval
+     *  and a rescue offer never clobber each other's text. Like
+     *  every notification here, on Android 13+ it appears only
+     *  when the user has allowed notifications for the app in
+     *  system settings — POST_NOTIFICATIONS is still not
+     *  declared. */
+    public static void postNeedsYou(Context ctx, String kind) {
+        ensureChannels(ctx);
+        Intent open = new Intent(ctx, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int id = ("needs:" + kind).hashCode();
+        PendingIntent pi = PendingIntent.getActivity(ctx, id, open,
+                PendingIntent.FLAG_UPDATE_CURRENT
+                        | PendingIntent.FLAG_IMMUTABLE);
+        String text = NEEDS_COPILOT.equals(kind)
+                ? "A run is stuck and offering a co-pilot rescue"
+                        + " — tap to step in"
+                : (NEEDS_ASK.equals(kind)
+                        ? "A run is asking you a question"
+                                + " — tap to answer"
+                        : "A run is waiting for your approval"
+                                + " — tap to decide");
+        Notification n = build(ctx, CHANNEL_RUNS,
+                "Ghost Hands — needs you", text, pi);
         notify(ctx, id, n);
     }
 
@@ -223,6 +270,81 @@ public final class Alerts {
         List<SavedGoals.SavedGoal> all = store.all();
         for (int i = 0; i < all.size(); i++) {
             if (all.get(i).hasSchedule()) armCheck(ctx, all.get(i));
+        }
+    }
+
+    // ---------------- v3.16: page-watch checks (R8) ----------------
+    // The goal checks' machinery, verbatim in shape: a page
+    // watch's alarm carries its alarm name ("page:" + url) in
+    // the same EXTRA_GOAL_NAME, its notification offers the
+    // same tap-to-run, and its cadence is the same next-fire
+    // computation. Notify-and-launch, exactly: nothing browses
+    // unattended, and the check itself runs readonly.
+
+    /** "Time for your check" for a page watch — the tap opens
+     *  the app with the watch's check loaded, ready to start
+     *  under readonly. */
+    public static void postPageWatchCheck(Context ctx,
+                                          PageWatches.PageWatch w) {
+        ensureChannels(ctx);
+        Intent open = new Intent(ctx, MainActivity.class);
+        open.putExtra(EXTRA_GOAL_NAME, PageWatches.alarmName(w));
+        open.putExtra(EXTRA_FROM_CHECK, true);
+        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(ctx,
+                ("check:" + PageWatches.alarmName(w)).hashCode(),
+                open,
+                PendingIntent.FLAG_UPDATE_CURRENT
+                        | PendingIntent.FLAG_IMMUTABLE);
+        Notification n = build(ctx, CHANNEL_CHECKS,
+                "Ghost Hands — time for your check",
+                "Time to check: " + PageWatches.label(w.url)
+                        + " — tap to run",
+                pi);
+        notify(ctx, ("check:" + PageWatches.alarmName(w)).hashCode(),
+                n);
+    }
+
+    /** Arm (or re-arm) one page watch's daily check at its
+     *  next occurrence. A watch without a schedule disarms. */
+    public static void armPageWatchCheck(Context ctx,
+                                         PageWatches.PageWatch w) {
+        if (w == null) return;
+        if (!w.hasSchedule()) {
+            cancelPageWatchCheck(ctx, w.url);
+            return;
+        }
+        AlarmManager am = (AlarmManager)
+                ctx.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        long when = SavedGoals.nextFireMillis(
+                System.currentTimeMillis(), w.schedMinutes,
+                TimeZone.getDefault());
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, when,
+                alarmIntent(ctx, PageWatches.alarmName(w)));
+    }
+
+    /** Disarm one page watch's daily check. */
+    public static void cancelPageWatchCheck(Context ctx,
+                                            String url) {
+        if (url == null) return;
+        AlarmManager am = (AlarmManager)
+                ctx.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        am.cancel(alarmIntent(ctx, PageWatches.ALARM_PREFIX + url));
+    }
+
+    /** Arm every scheduled page watch (the Activity calls
+     *  this at launch, beside armAllChecks). */
+    public static void armAllPageWatches(Context ctx,
+                                         PageWatches store) {
+        if (store == null) return;
+        List<PageWatches.PageWatch> all = store.all();
+        for (int i = 0; i < all.size(); i++) {
+            if (all.get(i).hasSchedule()) {
+                armPageWatchCheck(ctx, all.get(i));
+            }
         }
     }
 }

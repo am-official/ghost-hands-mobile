@@ -90,6 +90,12 @@ public class AnswerCard {
     public String watchVerdict = "";
     public String watchGoal = "";
     public long watchSinceMs = 0;
+    /** v3.8: the change arrived during watch quiet hours — it
+     *  was recorded but neither notified nor buzzed, and the
+     *  banner says so. Read from the "watch" event's "quiet"
+     *  flag; absent (every pre-v3.8 trail, and every change
+     *  outside the window) reads false. */
+    public boolean watchQuiet = false;
     public final List<String> watchDiff = new ArrayList<String>();
     /** v3.3: the run's end-of-run screenshot — the file NAME in
      *  the app's private shots store (Shots), from the run's
@@ -100,6 +106,23 @@ public class AnswerCard {
      *  so an old card's photo may honestly be gone). The share
      *  TEXT never carries it — the photo stays on the card. */
     public String screenshotFile = "";
+    /** v3.7: the run's step photographs — the file names from
+     *  its "step_screenshot" trail events, in trail order (the
+     *  steps' own order), from runs made with step screenshots
+     *  on. The card view shows them as a thumbnail strip under
+     *  the end shot; like the end shot they never enter the
+     *  card TEXT or the share text. Empty for every run made
+     *  with the setting off — which is every run before v3.7
+     *  and the default since. */
+    public final List<String> stepScreenshotFiles =
+            new ArrayList<String>();
+    /** v3.12 (R4): the events this card was built from — the
+     *  same list handed to fromEvents, kept so the Activity can
+     *  run RetryStrategy's pure mapping over the run's recorded
+     *  failure shape without re-reading the trail. A view, like
+     *  everything else on the card: never rendered into the
+     *  card text or the share text. */
+    public List<Map<String, Object>> sourceEvents = null;
 
     private AnswerCard() { }
 
@@ -111,11 +134,19 @@ public class AnswerCard {
     public static AnswerCard fromEvents(List<Map<String, Object>> events,
                                         String fallbackGoal) {
         if (events == null) return null;
+        AnswerCard built = buildFromEvents(events, fallbackGoal);
+        if (built != null) built.sourceEvents = events;
+        return built;
+    }
+
+    private static AnswerCard buildFromEvents(List<Map<String, Object>> events,
+                                        String fallbackGoal) {
         Map<String, Object> stopEv = null;
         Map<String, Object> summaryEv = null;
         Map<String, Object> watchEv = null;
         Map<String, Object> lastPerceive = null;
         String shotFile = "";
+        List<String> stepShots = new ArrayList<String>();
         String runGoal = null;
         // v3.1: the findings fallback's raw material — the last
         // successful read result the events record. A planner
@@ -169,6 +200,9 @@ public class AnswerCard {
             } else if ("screenshot".equals(type)) {
                 String f = str(ev.get("file"));
                 if (f.length() > 0) shotFile = f;
+            } else if ("step_screenshot".equals(type)) {
+                String f = str(ev.get("file"));
+                if (f.length() > 0) stepShots.add(f);
             }
         }
         if (stopEv == null) return null;
@@ -190,6 +224,7 @@ public class AnswerCard {
             card.reusePercent = num(summaryEv.get("reuse_percent"));
         }
         card.screenshotFile = shotFile;
+        card.stepScreenshotFiles.addAll(stepShots);
         for (int i = 0; i < noted.size(); i++) {
             Scratchpad.Fact f = noted.get(i);
             String line = "- " + f.text;
@@ -213,6 +248,8 @@ public class AnswerCard {
             card.watchVerdict = str(watchEv.get("verdict"));
             card.watchGoal = str(watchEv.get("goal_name"));
             card.watchSinceMs = num(watchEv.get("since_ms"));
+            card.watchQuiet = Boolean.TRUE.equals(
+                    watchEv.get("quiet"));
             Object diff = watchEv.get("diff");
             if (diff instanceof List) {
                 List<?> lines = (List<?>) diff;
@@ -250,6 +287,10 @@ public class AnswerCard {
             sb.append("Watch: changed").append(since).append(':');
             for (int i = 0; i < watchDiff.size(); i++) {
                 sb.append("\n- ").append(watchDiff.get(i));
+            }
+            if (watchQuiet) {
+                sb.append("\nArrived during quiet hours — kept "
+                        + "quiet until you opened the app.");
             }
             return sb.toString();
         }
