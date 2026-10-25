@@ -1,5 +1,6 @@
 # Ghost Hands Mobile
 
+[![CI](https://github.com/littlestjames82-sys/ghost-hands-mobile/actions/workflows/ci.yml/badge.svg)](https://github.com/littlestjames82-sys/ghost-hands-mobile/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v3.16.0-blue.svg)](CHANGELOG.md)
 [![Host tests](https://img.shields.io/badge/host_tests-1%2C738-green.svg)](v1/BUILD_NOTES.md)
