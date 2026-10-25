@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghost Hands Mobile: the web agent that runs entirely on your phone</title>
+<meta name="description" content="A goal-driven web agent for Android. On-device model, a governor that judges every action, a trail for every run. No cloud brain, no account. By Ghost Developer Studio.">
+<style>
+  :root { --bg:#0d0e13; --panel:#15161f; --line:#262738; --text:#e8e8ef; --dim:#a7a8bc; --violet:#8b7cf6; --violet2:#bb9af7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width:880px; margin:0 auto; padding:0 20px 64px; }
+  header { padding:56px 0 8px; text-align:center; }
+  .ghost { font-size:56px; line-height:1; }
+  h1 { font-size:34px; margin:14px 0 6px; letter-spacing:.2px; }
+  .tag { color:var(--violet2); font-size:18px; margin:0 0 10px; }
+  .sub { color:var(--dim); max-width:640px; margin:0 auto; }
+  .badges { margin:20px 0 4px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+  .badge { border:1px solid var(--line); background:var(--panel); border-radius:999px; padding:4px 12px; font-size:13px; color:var(--dim); }
+  .badge b { color:var(--text); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px 24px; margin-top:20px; }
+  h2 { font-size:20px; margin:0 0 10px; color:var(--violet2); }
+  p, li { color:var(--text); }
+  .dim { color:var(--dim); }
+  ul { padding-left:20px; margin:8px 0; }
+  li { margin:5px 0; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--violet2); font-weight:600; }
+  td:first-child { color:var(--dim); white-space:nowrap; }
+  a { color:var(--violet2); }
+  .cta { display:flex; gap:12px; justify-content:center; margin-top:26px; flex-wrap:wrap; }
+  .btn { background:var(--violet); color:#0d0e13; font-weight:700; text-decoration:none; padding:11px 20px; border-radius:10px; }
+  .btn.ghost2 { background:transparent; color:var(--violet2); border:1px solid var(--violet); }
+  footer { text-align:center; color:var(--dim); font-size:14px; margin-top:34px; }
+  code { background:#1d1e2a; padding:1px 6px; border-radius:6px; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="ghost" aria-hidden="true">👻</div>
+    <h1>Ghost Hands Mobile</h1>
+    <p class="tag">A goal-driven web agent that runs entirely on your phone.</p>
+    <p class="sub">Give it a goal in plain words. It plans, browses, reads, and acts on its own, using a language model that lives on the device. No cloud brain, no account, no data leaving the phone.</p>
+    <div class="badges">
+      <span class="badge"><b>v3.16.0</b> current release</span>
+      <span class="badge"><b>1,738</b> host tests, green in CI</span>
+      <span class="badge"><b>4</b> permissions, total</span>
+      <span class="badge"><b>MIT</b> licensed</span>
+    </div>
+    <div class="cta">
+      <a class="btn" href="https://github.com/littlestjames82-sys/ghost-hands-mobile">Source on GitHub</a>
+      <a class="btn ghost2" href="https://github.com/littlestjames82-sys/ghost-hands-mobile/releases/tag/v3.16.0">Release notes</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>How it works</h2>
+    <ul>
+      <li><b>Brain on device.</b> Qwen2.5-1.5B-Instruct runs through llama.cpp in the app. It downloads once (about 1 GB, pinned by SHA-256) and is never bundled.</li>
+      <li><b>Eyes.</b> A WebView stage plus JavaScript perception builds a numbered map of each page. On a stable page the planner gets only the delta from the last map, 75% fewer map tokens.</li>
+      <li><b>Governor.</b> Every action is classified (readonly / write / consequential), checked against policy packs, domain rules, and site grants, and written to a trail before it runs. Purchases, submits, and executable downloads ask first.</li>
+      <li><b>Trail.</b> Every run leaves a complete record: decisions, actions, approvals, corrections. If it did it, the trail says so.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What it can do today</h2>
+    <ul>
+      <li>Research goals with grounded answers: a fact it claims must trace to something it actually read.</li>
+      <li>Forms: selects, radio groups, checkboxes, dates, multi-field forms as first-class actions.</li>
+      <li>Up to 3 tabs at once, with per-tab memory and answer grounding isolated per tab.</li>
+      <li>Governed downloads (archives and executables ask first), document reading, and page watches that report what changed.</li>
+      <li>Watched and scheduled checks, voice goals, clarifying questions mid-run, and resume after an interrupted run.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>How it compares</h2>
+    <table>
+      <tr><th>Axis</th><th>Ghost Hands Mobile</th><th>Cloud assistants</th></tr>
+      <tr><td>Where the brain runs</td><td>On the phone</td><td>In a data center</td></tr>
+      <tr><td>Works offline</td><td>Yes, after model download</td><td>No</td></tr>
+      <tr><td>Governance</td><td>Approvals, deny rules, full audit trail</td><td>Varies, rarely a trail</td></tr>
+      <tr><td>Reach</td><td>The browser (today)</td><td>Apps and system, on flagship phones</td></tr>
+      <tr><td>Speed</td><td>Slow: roughly 20 to 40 seconds a step</td><td>Fast</td></tr>
+      <tr><td>Price</td><td>Free, MIT</td><td>Subscription or flagship hardware</td></tr>
+    </table>
+    <p class="dim">The gaps are printed on purpose: cloud assistants are faster and reach further into the phone. Ghost Hands trades that for privacy, governance, and a trail you can audit. The full sourced comparison lives in the repository roadmap work.</p>
+  </section>
+
+  <section>
+    <h2>Install</h2>
+    <p>Ghost Hands is a sideloaded APK, not a Play Store app. Builds are distributed by Ghost Developer Studio directly; the source and build recipe are public:</p>
+    <ul>
+      <li>Package <code>com.ghosthands.app</code>, min Android 7 (SDK 24), target SDK 34.</li>
+      <li>Permissions, the whole set: <code>INTERNET</code>, <code>ACCESS_NETWORK_STATE</code>, <code>RECORD_AUDIO</code> (voice goals only), <code>VIBRATE</code>.</li>
+      <li>Build it yourself: <code>cd v1 &amp;&amp; ./run-host-tests.sh &amp;&amp; ./build-apk.sh</code></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Honest limits</h2>
+    <ul>
+      <li>Steps are slow by cloud standards. A 1.5B model on a mid-range phone is not a data center.</li>
+      <li>Perception covers the top document's visible elements. Iframes, shadow DOM, and canvas UIs read as sparse maps.</li>
+      <li>Several field passes are still owed on real devices. They are tracked as public issues, not hidden.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>From <a href="https://github.com/littlestjames82-sys">Ghost Developer Studio</a>, Oakdale, Tennessee. Sibling project: <a href="https://github.com/littlestjames82-sys/ghost-hands">Ghost Hands for desktop</a>.</p>
+  </footer>
+</div>
+</body>
+</html>
