@@ -14,3 +14,12 @@ libs-arm64/
 # Lab scratch dependencies / compiled classes
 read-lab/node_modules/
 parity-lab/classes/
+# Lab generated outputs and captured pages (kept locally, not committed)
+parity-lab/*-out.json
+parity-lab/shape-out.txt
+parity-lab/state.tsv
+parity-lab/*-real.html
+read-lab/*-real.html
+read-lab/*-shaped.html
+parity-lab/probe[2-9].mjs
+parity-lab/probe-expr.js

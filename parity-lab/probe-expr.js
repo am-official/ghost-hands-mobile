@@ -1,1 +1,0 @@
-(function(){var els=(window.__gh&&window.__gh.els)||[];var all=(window.__gh&&window.__gh.all)||[];function d(e){if(!e)return 'NULL';return e.tagName+' name='+JSON.stringify((e.innerText||e.textContent||'').trim().slice(0,44))+' href='+(e.href||'');}return JSON.stringify({elsLen:els.length,allLen:all.length,slot6:d(els[5]),slot12:d(els[11])});})()
